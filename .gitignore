@@ -1,0 +1,16 @@
+# Raw datasets
+data/raw/
+*.dta
+
+# Processed datasets
+data/processed/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+.env
