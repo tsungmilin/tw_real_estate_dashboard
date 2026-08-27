@@ -2,6 +2,9 @@
 data/raw/
 *.dta
 
+# Local source files used to build versioned reference CSVs
+data/reference/source/
+
 # Processed datasets
 data/processed/
 data/audit/

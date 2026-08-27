@@ -8,3 +8,5 @@
 目前結果對應的原始檔共有 4,380,208 rows、63 columns，SHA-256 為 `1d81eb74a5c7f3607b93966732b90a7e3b8cdf5debacf905b67e1afab86b25b2`。若來源 checksum 不同，不應直接沿用這些統計。
 
 每份結果由哪支程式產生、採用什麼方法，以及何時需要重跑，請見 [profiling scripts 說明](../src/profiling/README.md)。
+
+`summary/six_municipality_transition_validation.csv` 由 location validator 產生，用來證明六都歷史名稱與行政區 mapping 通過；建置方式見 [location reference](../data/reference/README.md)。

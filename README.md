@@ -45,6 +45,7 @@ Tableau 只讀取 analytics-ready data，不直接負責 raw cleaning 或完整 
 - [Canonical schema](docs/canonical-schema.md) — `transactions_clean` 的詳細 data contract
 - [Project status](docs/project-status.md) — 進度、完成條件、下一步與未定案事項
 - [Profiling scripts](src/profiling/README.md) — 每支 profiling script 的目的、方法、輸出與重跑條件
+- [Location reference](data/reference/README.md) — 368-row lookup、aliases、建置與六都驗證方式
 
 若文件內容衝突，cleaning 行為以 `cleaning_spec_v1.md` 為準；`canonical-schema.md` 必須與它同步更新。
 
@@ -96,6 +97,7 @@ Canonical dataset 只保留：
 
 - `pandas`：分批讀取 Stata 並執行資料轉換。
 - `numpy`：數值運算與容許誤差比較。
+- `openpyxl`：唯讀解析行政區 Excel crosswalk。
 - `pyarrow`：寫入及讀回 Parquet。
 - `pytest`：執行不需要掃描完整原始資料的自動測試。
 

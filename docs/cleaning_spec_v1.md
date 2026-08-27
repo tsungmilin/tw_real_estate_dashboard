@@ -88,7 +88,7 @@ Parquet 是本機可重建的 cleaning checkpoint，不設計成複雜資料湖�
 使用兩份既有 reference source 建立專案內的 district-level lookup：
 
 - `vill_code_2020AndAfter.dta`：368 個鄉鎮市區，欄位為 `hsn_nm / town_nm / hsn_cd / town_cd`。
-- `vill_code_內政編碼跟財資編碼對照版(逸芩整理).xlsx`：村里層級的新舊代碼 crosswalk。
+- `vill_code_內政編碼跟財資編碼對照版(逸芩整理).xlsx`：提供官方縣市與鄉鎮 IDs；建置時只讀取鄉鎮層級欄位。
 
 實作時產生並版本化：
 
@@ -114,9 +114,9 @@ Pipeline 不得硬編碼 Desktop 或論文資料夾的絕對路徑。
 
 建立規則：
 
-1. Excel 先排除 `hsn_cd` 或 `town_cd` 缺失的列；已知一筆為雲林縣斗六市正心里。
-2. 由村里層級去重為 368 個 district rows。
-3. 與 town-level `.dta` 的 368 rows 全數對上。
+1. Excel 只保留 `county_id / town_id / hsn_nm / town_nm`，去重為 368 個 district rows。
+2. Town-level `.dta` 提供 `hsn_cd / town_cd` legacy codes。
+3. 兩邊以 `hsn_nm + town_nm` 一對一合併，368 rows 必須全數對上。
 4. `legacy_county_code + district` 必須唯一。
 5. `county_id + town_id` 必須唯一。
 6. 任一唯一性或 368-row 完整性檢查失敗，整次 cleaning 停止。
@@ -136,6 +136,8 @@ Raw join key 使用 `countycd + normalized town`，不是 `county + town`。Raw 
 另有 raw `桃園縣 → 桃園市` 共 576,235 rows；因 join 使用 `countycd`，不需改寫 join key，輸出 `city` 直接採 lookup 的 `桃園市`。
 
 Alias 後仍無法 mapping 的 row 排除為 `unmapped_location`。目前有效期間內剩 97 rows，皆為 raw `town` 空白。
+
+六都的 lookup district counts 已驗證為臺北 12、新北 29、桃園 13、臺中 29、臺南 37、高雄 38。有效期間 raw data 中的歷史縣市名為 `桃園縣`；因 join 使用 `countycd`，可正確輸出 canonical `桃園市`。
 
 Clean Parquet 保存 `county_id / town_id / city / district`；PostgreSQL `core.dim_location` 之後才建立 surrogate `location_id`。
 

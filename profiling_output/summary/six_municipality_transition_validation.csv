@@ -1,0 +1,7 @@
+canonical_city,legacy_county_code,raw_county_name,transaction_rows,mapped_rows,unmapped_rows,unmapped_nonblank_town_rows,historical_name,validation_status
+臺北市,A,臺北市,304163,304163,0,0,False,PASS
+新北市,F,新北市,702337,702337,0,0,False,PASS
+桃園市,H,桃園縣,571110,571106,4,0,True,PASS
+臺中市,B,臺中市,610696,610655,41,0,False,PASS
+臺南市,D,臺南市,384829,384826,3,0,False,PASS
+高雄市,E,高雄市,498784,498775,9,0,False,PASS
