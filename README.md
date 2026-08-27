@@ -88,6 +88,33 @@ Canonical dataset 只保留：
 
 `transaction_count` 指 clean transaction rows 數，不代表官方建物所有權買賣移轉棟數。Canonical 保持新台幣元與平方公尺；坪、萬元、每坪單價與屋齡留到 analytics layer。
 
+## Python environment
+
+本專案使用 Python 3.13.3。`.venv` 是只屬於此專案的隔離環境，不會改動系統 Python，也不提交 Git。
+
+核心套件用途：
+
+- `pandas`：分批讀取 Stata 並執行資料轉換。
+- `numpy`：數值運算與容許誤差比較。
+- `pyarrow`：寫入及讀回 Parquet。
+- `pytest`：執行不需要掃描完整原始資料的自動測試。
+
+第一次建立環境：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.lock
+```
+
+之後回到專案，只需要重新啟用：
+
+```bash
+source .venv/bin/activate
+```
+
+`pyproject.toml` 記錄專案直接使用的套件與允許版本；`requirements.lock` 固定這次實際安裝的直接與間接套件版本。更新 dependency 時兩者必須同步，並重新完成環境與測試驗證。
+
 ## Running the project
 
-Profiling 的用途、執行方式與重跑條件記錄於 [`src/profiling/README.md`](src/profiling/README.md)。相同 source checksum 不必重跑 profiling。正式 cleaning entry point、Python dependencies 與可重現環境仍在 Block 2 實作中，完整 cleaning 執行方式會在第一版 full run 通過 publication gates 後補入。
+Profiling 的用途、執行方式與重跑條件記錄於 [`src/profiling/README.md`](src/profiling/README.md)。相同 source checksum 不必重跑 profiling。Python 版本與 dependencies 已固定；正式 cleaning entry point 及完整執行方式會在第一版 full run 通過 publication gates 後補入。

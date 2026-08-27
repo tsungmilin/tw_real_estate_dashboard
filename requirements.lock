@@ -1,0 +1,12 @@
+# Python 3.13.3 environment resolved on 2026-08-27.
+# Includes runtime and test dependencies from pyproject.toml.
+iniconfig==2.3.0
+numpy==2.5.2
+packaging==26.3
+pandas==3.0.5
+pluggy==1.6.0
+pyarrow==25.0.1
+Pygments==2.21.0
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+six==1.17.0

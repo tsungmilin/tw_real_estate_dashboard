@@ -1,0 +1,21 @@
+[project]
+name = "taiwan-real-estate-dashboard"
+version = "0.1.0"
+description = "Reproducible cleaning pipeline for Taiwan real-estate transaction data"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "numpy>=2.5.2,<3",
+    "pandas>=3.0.5,<4",
+    "pyarrow>=25.0.1,<26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1,<10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

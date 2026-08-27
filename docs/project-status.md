@@ -24,6 +24,12 @@
 - [Cleaning Specification v1](cleaning_spec_v1.md) 已完成設計，待實作驗證。
 - [Canonical schema](canonical-schema.md) 已整理為詳細 data contract。
 
+### Reproducible environment
+
+- 專案 Python 固定為 3.13.3，使用 project-local `.venv`，不改動系統 Python。
+- `pyproject.toml` 記錄直接 dependencies；`requirements.lock` 固定已驗證的完整套件版本。
+- `numpy`、`pandas`、`pyarrow` 與 `pytest` 已安裝並通過 import、dependency 與 Stata reader smoke test。
+
 ## 2. Current-source baseline
 
 | Stage / reason | Rows |
@@ -70,14 +76,14 @@ data/audit/cleaning_run_<cleaning_run_id>.json
 4. 實作 canonical transformations and flags。
 5. 實作 clean／excluded writers 與 audit collector。
 6. 建立 automated tests and full-run publication gates。
-7. 補上 Python dependency／lock file 與執行指令。
+7. 第一版 full run 通過後補上正式 cleaning 執行指令。
 
 ## 5. Repository state after Profiling v1 closeout
 
 - Profiling scripts 已依 01–09 集中於 `src/profiling/`，用途、方法、輸出與重跑條件都有獨立說明。
 - Aggregate results 保存在 `profiling_output/summary/`；row-level extracts 與暫存 SQLite 保存在 ignored local paths。
 - Raw `.dta`、processed Parquet、cleaning audit、private profiling outputs 與本機環境檔不提交 Git。
-- Python dependency／lock file 與正式執行指令仍屬 Block 2 cleaning pipeline 工作。
+- Python environment 與 dependency lock 已完成；正式 cleaning 執行指令仍待 pipeline 實作。
 
 ## 6. Later phases
 
