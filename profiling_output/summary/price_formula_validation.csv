@@ -1,0 +1,4 @@
+﻿validation,comparable_rows,matched_rows,match_rate
+h_price_pin_vs_h_price_m2,4258995,4258986,0.999997886825413
+house_price_formula,1813269,1791332,0.9879019604923484
+parking_adjusted_price_formula,1332681,942637,0.7073238081731487

@@ -1,0 +1,4 @@
+﻿column_name,rows,missing_count,missing_rate,zero_count,zero_rate,negative_count,min,max,unique_count
+room,3146530,0,0.0,184683,0.058694180573520674,0,0,784,154
+hall,3146530,0,0.0,255471,0.0811913441155813,0,0,322,74
+bath,3146530,0,0.0,151067,0.0480106657174729,0,0,394000,148

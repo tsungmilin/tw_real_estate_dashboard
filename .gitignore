@@ -4,13 +4,23 @@ data/raw/
 
 # Processed datasets
 data/processed/
+data/audit/
+*.parquet
 
 # Python cache
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+
+# Local temporary databases
+*.sqlite
 
 # macOS
 .DS_Store
 
 # Environment / secrets
 .env
+
+# Local row-level profiling outputs
+/profiling_output/private/

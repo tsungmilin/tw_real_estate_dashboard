@@ -1,0 +1,8 @@
+﻿group,formula,comparable_rows,matched_rows,match_rate
+A_both_positive,adjust_price_and_area,636316,627234,0.9857272172945518
+A_both_positive,unadjusted,636557,474,0.0007446308814450238
+B_both_zero,unadjusted,335604,315366,0.9396967854971932
+C_size_only,unadjusted,327401,318152,0.9717502390035461
+C_size_only,adjust_area_only,327281,14,4.277669647795014e-05
+D_price_only,unadjusted,33543,30881,0.9206391795605641
+D_price_only,adjust_price_only,33480,23,0.0006869772998805257

@@ -1,0 +1,5 @@
+﻿column_name,rows,missing,zero,negative,min,max
+trans_size,3146530,0,53,0,0.0,157501.75
+mainbuilding_area,3146530,0,52071,0,0.0,146024.23
+affbuilding_area,3146530,0,1894715,0,0.0,16196.57
+balcony_area,3146530,0,778880,0,0.0,10207.0

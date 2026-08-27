@@ -1,0 +1,6 @@
+﻿column_name,total_rows,pandas_na_count,blank_string_count,pandas_na_rate,blank_string_rate,raw_unique_count
+type,4380208,0,2,0.0,4.565993213107688e-07,6
+trans_num,4380208,0,0,0.0,0.0,1746
+story,4380208,1188743,0,0.2713896235064636,0.0,40
+building_type,4380208,0,0,0.0,0.0,12
+usage,4380208,0,1197618,0.0,0.27341578299478014,479

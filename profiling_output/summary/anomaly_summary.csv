@@ -1,0 +1,7 @@
+﻿metric,value
+total_rows,4380208
+year_missing,105
+year_raw_lt_101,10241
+year_raw_101_to_113,4369855
+year_raw_gt_113,7
+invalid_day_outside_1_31,130

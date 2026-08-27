@@ -1,0 +1,3 @@
+﻿group,comparable_rows,equal_rows,landtot_gt_detail_sum_rows,landtot_lt_detail_sum_rows,mismatch_rows,equal_rate,mismatch_rate,landtot_gt_detail_sum_rate,landtot_lt_detail_sum_rate
+land5_missing,4129612,4129609,1,2,3,0.9999992735394996,7.26460500405365e-07,2.4215350013512163e-07,4.843070002702433e-07
+land5_present,215011,44597,170414,0,170414,0.20741729492909666,0.7925827050709033,0.7925827050709033,0.0

@@ -1,0 +1,6 @@
+﻿column_name,rows,pandas_na_count,blank_count,missing_or_blank_rate,unique_count
+partition,3146530,0,0,0.0,2
+elevator,3146530,3146530,0,1.0,1
+building_type,3146530,0,0,0.0,12
+usage,3146530,0,16946,0.005385615265069775,50
+note_yn,3146530,0,0,0.0,2
