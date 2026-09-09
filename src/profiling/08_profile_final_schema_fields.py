@@ -1,3 +1,5 @@
+"""Validate final schema candidates, including exact global source-ID uniqueness."""
+
 from collections import Counter, defaultdict
 from pathlib import Path
 import sqlite3
@@ -6,9 +8,7 @@ import numpy as np
 import pandas as pd
 
 
-# ============================================================
-# 1. Paths
-# ============================================================
+# 1. 路徑
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,9 +42,7 @@ PRIVATE_DIR.mkdir(
 )
 
 
-# ============================================================
-# 2. Columns
-# ============================================================
+# 2. 欄位
 
 COLUMNS = [
     "no",
@@ -63,7 +61,7 @@ COLUMNS = [
     "balcony_area",
     "trans_landsize",
 
-    # 尚未正式收尾的 low-cardinality fields
+    # 在此剖析步驟中檢查值域較小、仍需由清理契約決定語意的欄位。
     "story",
     "manage",
     "parking_type",
@@ -87,43 +85,16 @@ CHUNK_SIZE = 100_000
 TOP_N = 30
 
 
-# ============================================================
-# 3. Exact global uniqueness check for no
-# ============================================================
-#
-# 之前我們只知道：
-#
-# no_missing = 0
-# no_duplicates_within_chunks = 0
-#
-# 但「每個 chunk 內沒有 duplicate」
-# 不代表不同 chunks 之間沒有相同 no。
-#
-# 因此現在做 exact global uniqueness。
-#
-#
-# 為什麼使用 SQLite？
-#
-# 如果直接建立：
-#
-# seen = set()
-#
-# 並塞入 438 萬個 no，
-# Python set 可能占掉大量 RAM。
-#
-# SQLite 則把 unique values 放在 disk-backed database，
-# 可以做 exact uniqueness check，而不必全部留在 RAM。
-#
-# 這只是一個 profiling temporary database，
-# 不是正式 PostgreSQL architecture。
+# 3. no 的全資料唯一性；批次內無重複不代表跨批次無重複。
+# 使用臨時 SQLite 進行全資料唯一性檢查，避免將 438 萬個 no 全數留在記憶體。
+# 這個資料庫只供剖析使用，不屬於正式 PostgreSQL 架構。
 
 TEMP_DB_PATH = (
     PRIVATE_DIR
     / "no_uniqueness_temp.sqlite"
 )
 
-# 如果上次程式中途停止留下 temp file，
-# 重新執行前先刪除。
+# 重新執行前移除上次中斷留下的臨時檔。
 TEMP_DB_PATH.unlink(
     missing_ok=True
 )
@@ -145,9 +116,7 @@ no_missing = 0
 no_blank = 0
 
 
-# ============================================================
-# 4. Date profiling containers
-# ============================================================
+# 4. 日期剖析容器
 
 date_stats = Counter()
 
@@ -162,16 +131,12 @@ date_example_seen = defaultdict(set)
 MAX_DATE_EXAMPLES = 15
 
 
-# ============================================================
-# 5. Note consistency
-# ============================================================
+# 5. 備註一致性
 
 note_consistency = Counter()
 
 
-# ============================================================
-# 6. Building-area component statistics
-# ============================================================
+# 6. 建物面積組成統計
 
 AREA_COLUMNS = [
     "trans_size",
@@ -195,9 +160,7 @@ area_stats = {
 area_relationships = Counter()
 
 
-# ============================================================
-# 7. Land-area statistics by transaction type
-# ============================================================
+# 7. 各交易類型的土地面積統計
 
 land_area_stats = {
     transaction_type: {
@@ -212,9 +175,7 @@ land_area_stats = {
 }
 
 
-# ============================================================
-# 8. Remaining category fields
-# ============================================================
+# 8. 其餘類別欄位
 
 category_stats = {
     "story": Counter(),
@@ -245,9 +206,7 @@ def normalize_category(value):
     return value
 
 
-# ============================================================
-# 9. Read .dta
-# ============================================================
+# 9. 讀取 `.dta`
 
 with pd.read_stata(
     DTA_PATH,
@@ -269,9 +228,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 10. no — exact global uniqueness
-        # ====================================================
+        # 10. no 全資料唯一性
 
         no_total_rows += len(chunk)
 
@@ -299,17 +256,7 @@ with pd.read_stata(
         ]
 
 
-        # executemany：
-        #
-        # 一次把很多 parameters 交給 SQLite。
-        #
-        # INSERT OR IGNORE：
-        #
-        # 第一次遇到 no → insert
-        # 再次遇到相同 no → 因 PRIMARY KEY 衝突而 ignore
-        #
-        # 因此最後 table row count
-        # 就是 exact distinct no count。
+        # PRIMARY KEY 配合 INSERT OR IGNORE，使最後列數等於 no 的不重複數量。
 
         conn.executemany(
             """
@@ -323,18 +270,14 @@ with pd.read_stata(
         conn.commit()
 
 
-        # ====================================================
-        # 11. House subset
-        # ====================================================
+        # 11. 建物子集
 
         house = chunk[
             chunk["type"].isin(HOUSE_TYPES)
         ].copy()
 
 
-        # ====================================================
         # 12. date_complete
-        # ====================================================
 
         raw_date = pd.to_numeric(
             house["date_complete"],
@@ -362,10 +305,7 @@ with pd.read_stata(
         ]
 
 
-        # date_complete 看起來是 integer-like numeric，
-        # 但 raw dtype 是 float。
-        #
-        # round() 後檢查是否真的接近 integer。
+        # date_complete 的原始型別是浮點數；四捨五入後確認是否接近整數。
 
         rounded_date = (
             positive_date
@@ -404,9 +344,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # 12.1 Digit distribution + examples
-        # ----------------------------------------------------
+        # 12.1 位數分布與範例
 
         for length, count in (
             digit_length
@@ -456,28 +394,7 @@ with pd.read_stata(
                     )
 
 
-        # ----------------------------------------------------
-        # 12.2 Test ROC variable-length hypothesis
-        # ----------------------------------------------------
-        #
-        # Hypothesis:
-        #
-        # 最後四碼：
-        # MMDD
-        #
-        # 前面所有 digits：
-        # ROC year
-        #
-        # Examples:
-        #
-        # 990101
-        # → 99 / 01 / 01
-        #
-        # 1010101
-        # → 101 / 01 / 01
-        #
-        # 90101
-        # → 9 / 01 / 01
+        # 12.2 測試不定長民國日期：前置數字為年，最後四碼為 MMDD。
 
         parseable_length = (
             digit_length >= 5
@@ -511,13 +428,7 @@ with pd.read_stata(
         )
 
 
-        # 建立 ISO format：
-        #
-        # YYYY-MM-DD
-        #
-        # errors="coerce"：
-        # 不合法日期，例如 2020-13-45，
-        # 會變成 NaT。
+        # 建立 YYYY-MM-DD；不合法日期轉為 NaT。
 
         iso_date = (
             gregorian_year
@@ -576,9 +487,7 @@ with pd.read_stata(
             )
 
 
-        # ----------------------------------------------------
-        # 12.3 Completion date after transaction date?
-        # ----------------------------------------------------
+        # 12.3 完工日是否晚於交易日
 
         valid_idx = (
             parsed_date[
@@ -670,9 +579,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 13. note_yn vs note
-        # ====================================================
+        # 13. 比較 note_yn 與 note
 
         note_subset = chunk[
             chunk["type"].isin(
@@ -749,9 +656,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 14. Building-area components
-        # ====================================================
+        # 14. 建物面積組成
 
         for column in AREA_COLUMNS:
 
@@ -816,11 +721,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # Hypothesis 1:
-        #
-        # balcony_area 是否 <= affbuilding_area
-        # ----------------------------------------------------
+        # 假設 1：balcony_area <= affbuilding_area。
 
         mask = (
             area[
@@ -856,13 +757,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # Hypothesis 2:
-        #
-        # main + aff <= total building area
-        #
-        # 其差額通常可能包含共有部分。
-        # ----------------------------------------------------
+        # 假設 2：main + aff <= total building area；差額可能是共有部分。
 
         mask = (
             area[
@@ -907,14 +802,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # Diagnostic only:
-        #
-        # main + aff + balcony <= total
-        #
-        # 用這個結果協助判斷 balcony
-        # 是否已包含在 affbuilding_area 中。
-        # ----------------------------------------------------
+        # 診斷 main + aff + balcony <= total，判斷 balcony 是否已包含於 affbuilding_area。
 
         mask = area.notna().all(
             axis=1
@@ -954,9 +842,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 15. trans_landsize by transaction type
-        # ====================================================
+        # 15. 各交易類型的 trans_landsize
 
         keep_subset = chunk[
             chunk["type"].isin(
@@ -1018,11 +904,9 @@ with pd.read_stata(
                     )
 
 
-        # ====================================================
-        # 16. Remaining categorical fields
-        # ====================================================
+        # 16. 其餘類別欄位
 
-        # story / manage：房地交易
+        # story／manage：房地交易
         for column in [
             "story",
             "manage",
@@ -1056,8 +940,7 @@ with pd.read_stata(
             )
 
 
-        # parking_type：
-        # 只看房地+車位
+        # parking_type：只檢查房地＋車位交易。
 
         parking_subset = chunk[
             chunk["type"]
@@ -1092,8 +975,7 @@ with pd.read_stata(
         )
 
 
-        # 土地使用分區：
-        # canonical 保留的三類交易都看
+        # 土地使用分區：檢查標準資料保留的三種交易類型。
 
         for column in [
             "usage_type",
@@ -1131,9 +1013,7 @@ with pd.read_stata(
             )
 
 
-# ============================================================
-# 17. Finish no uniqueness
-# ============================================================
+# 17. 完成 no 唯一性統計
 
 distinct_no = conn.execute(
     """
@@ -1176,17 +1056,14 @@ no_df = pd.DataFrame(
 )
 
 
-# Temp SQLite 已經完成使命，
-# 刪除以避免留下大型 temporary file。
+# 剖析完成後刪除臨時 SQLite 檔。
 
 TEMP_DB_PATH.unlink(
     missing_ok=True
 )
 
 
-# ============================================================
-# 18. Date outputs
-# ============================================================
+# 18. 日期輸出
 
 date_df = pd.DataFrame(
     [
@@ -1228,9 +1105,7 @@ date_detail_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 19. Note output
-# ============================================================
+# 19. 備註輸出
 
 note_df = pd.DataFrame(
     [
@@ -1239,9 +1114,7 @@ note_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 20. Area outputs
-# ============================================================
+# 20. 面積輸出
 
 area_rows = []
 
@@ -1277,9 +1150,7 @@ relationship_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 21. Land area output
-# ============================================================
+# 21. 土地面積輸出
 
 land_rows = []
 
@@ -1301,9 +1172,7 @@ land_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 22. Category outputs
-# ============================================================
+# 22. 類別輸出
 
 category_summary_rows = []
 category_top_rows = []
@@ -1367,9 +1236,7 @@ category_top_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 23. Save
-# ============================================================
+# 23. 儲存輸出
 
 no_df.to_csv(
     SUMMARY_DIR / "no_global_uniqueness.csv",
@@ -1426,9 +1293,7 @@ category_top_df.to_csv(
 )
 
 
-# ============================================================
-# 24. Print
-# ============================================================
+# 24. 顯示結果
 
 print("\nNO uniqueness:")
 print(no_df.to_string(index=False))

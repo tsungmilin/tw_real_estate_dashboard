@@ -1,12 +1,12 @@
+"""Compare parking price and area adjustment formulas across completeness groups."""
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 
-# ============================================================
-# 1. Paths
-# ============================================================
+# 1. 路徑
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,9 +29,7 @@ OUTPUT_DIR.mkdir(
 )
 
 
-# ============================================================
-# 2. Columns
-# ============================================================
+# 2. 欄位
 
 COLUMNS = [
     "type",
@@ -54,22 +52,13 @@ CHUNK_SIZE = 100_000
 
 HOUSE_PARKING_TYPE = "房地(土地+建物)+車位"
 
-# 官方單價為整數元 / m²，允許 rounding 差異 ±1 元。
+# 官方單價為整數元／m²，允許四捨五入差異 ±1 元。
 PRICE_ATOL = 1
 
 
-# ============================================================
-# 3. Group counters
-# ============================================================
-#
-# A: parking_price > 0 and parking_size > 0
-# B: parking_price = 0 and parking_size = 0
-# C: parking_price = 0 and parking_size > 0
-# D: parking_price > 0 and parking_size = 0
-#
-# OTHER:
-# 若未來出現 missing / negative 等異常情況，
-# 不會被偷偷忽略。
+# 3. 車位價格與面積組合計數
+# A：價格、面積均大於 0；B：均為 0；C：價格為 0；D：面積為 0。
+# OTHER 保留缺值、負值或新的異常組合，避免靜默忽略。
 
 group_counts = {
     "A_both_positive": 0,
@@ -80,17 +69,9 @@ group_counts = {
 }
 
 
-# ============================================================
-# 4. Formula validation counters
-# ============================================================
+# 4. 公式驗證計數；每組測試一至兩種可能公式。
 #
-# 每種 group 會測試一到兩種可能公式。
-#
-# comparable:
-# 有足夠資料、可以實際計算公式的 rows
-#
-# matched:
-# 計算結果與 h_price_m2 在 ±1 元內一致的 rows
+# comparable 表示資料足以計算；matched 表示與 h_price_m2 相差不超過 ±1 元。
 
 formula_stats = {}
 
@@ -113,7 +94,7 @@ def add_formula_result(
             "matched": 0,
         }
 
-    # 只保留 actual / expected 都是有限 numeric value 的 rows。
+    # 只比較實際值與預期值皆為有限數值的資料列。
     valid_mask = (
         actual.notna()
         & expected.notna()
@@ -140,9 +121,7 @@ def add_formula_result(
     )
 
 
-# ============================================================
-# 5. Read Stata file
-# ============================================================
+# 5. 讀取 Stata 檔
 
 total_parking_rows = 0
 
@@ -161,9 +140,7 @@ with pd.read_stata(
         start=1,
     ):
 
-        # ----------------------------------------------------
-        # 5.1 Only 房地 + 車位
-        # ----------------------------------------------------
+        # 5.1 只保留房地＋車位交易
 
         chunk = chunk[
             chunk["type"] == HOUSE_PARKING_TYPE
@@ -178,9 +155,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # 5.2 Numeric conversion
-        # ----------------------------------------------------
+        # 5.2 數值轉換
 
         for column in NUMERIC_COLUMNS:
 
@@ -190,9 +165,7 @@ with pd.read_stata(
             )
 
 
-        # ====================================================
-        # 6. Define A / B / C / D
-        # ====================================================
+        # 6. 定義 A／B／C／D 組
 
         price_positive = (
             chunk["parking_price"] > 0
@@ -232,13 +205,7 @@ with pd.read_stata(
         )
 
 
-        # "|" 對 pandas Boolean Series 表示 OR。
-        #
-        # "~" 表示 NOT。
-        #
-        # 所以 other_mask 意思是：
-        #
-        # 不屬於 A、B、C、D 的 rows。
+        # other_mask 收納不屬於 A、B、C、D 的資料列。
 
         known_groups = (
             group_a
@@ -271,9 +238,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 7. Common valid values
-        # ====================================================
+        # 7. 各公式共用的有效值條件
 
         basic_valid = (
             chunk["housing_totprice"].notna()
@@ -285,19 +250,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 8. Group A
-        # parking_price > 0
-        # parking_size  > 0
-        # ====================================================
-        #
-        # Formula A1:
-        #
-        # 扣掉車位價格與面積
-        #
-        # (total - parking price)
-        # -----------------------
-        # (area - parking area)
+        # 8. A 組：價格、面積均大於 0，測試同時扣除兩者的公式。
 
         a_adjusted_mask = (
             group_a
@@ -351,11 +304,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # 同一批 A rows 也測試「完全不扣車位」。
-        #
-        # 這是 comparison benchmark。
-        # ----------------------------------------------------
+        # 同一批 A 組資料也測試「完全不扣車位」作為比較基準。
 
         a_unadjusted_mask = (
             group_a
@@ -387,15 +336,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 9. Group B
-        # parking_price = 0
-        # parking_size  = 0
-        # ====================================================
-        #
-        # 預期：
-        #
-        # total_price / total_area
+        # 9. B 組：車位價格與面積均為 0，預期不扣除車位。
 
         b_mask = (
             group_b
@@ -427,20 +368,10 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 10. Group C
-        # parking_price = 0
-        # parking_size  > 0
-        # ====================================================
-        #
-        # 有車位面積，但沒有車位價格。
-        #
-        # 我們不知道 raw data 實際採哪種邏輯，
-        # 所以同時測兩種。
+        # 10. C 組：有車位面積但無車位價格，同時測試兩種可能公式。
 
 
-        # C1:
-        # 完全不扣車位
+        # C1：完全不扣車位。
 
         c_unadjusted_mask = (
             group_c
@@ -472,11 +403,7 @@ with pd.read_stata(
         )
 
 
-        # C2:
-        # 只扣車位面積
-        #
-        # 這主要是 diagnostic，
-        # 不是我們預設的正確官方公式。
+        # C2：只扣車位面積；這是診斷假設，不代表官方公式。
 
         c_area_adjusted_mask = (
             group_c
@@ -519,17 +446,10 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 11. Group D
-        # parking_price > 0
-        # parking_size  = 0
-        # ====================================================
-        #
-        # 同樣測兩種可能。
+        # 11. D 組：有車位價格但無車位面積，同時測試兩種可能公式。
 
 
-        # D1:
-        # 完全不調整
+        # D1：完全不調整。
 
         d_unadjusted_mask = (
             group_d
@@ -561,8 +481,7 @@ with pd.read_stata(
         )
 
 
-        # D2:
-        # 只扣車位價格
+        # D2：只扣車位價格。
 
         d_price_adjusted_mask = (
             group_d
@@ -605,9 +524,7 @@ with pd.read_stata(
         )
 
 
-# ============================================================
-# 12. Group summary
-# ============================================================
+# 12. 分組摘要
 
 group_rows = []
 
@@ -628,9 +545,7 @@ for group_name, count in group_counts.items():
 group_df = pd.DataFrame(group_rows)
 
 
-# ============================================================
-# 13. Formula summary
-# ============================================================
+# 13. 公式摘要
 
 formula_rows = []
 
@@ -661,9 +576,7 @@ formula_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 14. Save
-# ============================================================
+# 14. 儲存輸出
 
 group_output = (
     OUTPUT_DIR
@@ -688,9 +601,7 @@ formula_df.to_csv(
 )
 
 
-# ============================================================
-# 15. Print
-# ============================================================
+# 15. 顯示結果
 
 print("\n")
 print("=" * 70)

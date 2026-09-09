@@ -1,12 +1,12 @@
+"""Profile remaining house attributes, completion dates, and note indicators."""
+
 from collections import Counter
 from pathlib import Path
 
 import pandas as pd
 
 
-# ============================================================
-# 1. Paths
-# ============================================================
+# 1. 路徑
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,9 +29,7 @@ OUTPUT_DIR.mkdir(
 )
 
 
-# ============================================================
-# 2. Columns
-# ============================================================
+# 2. 欄位
 
 COLUMNS = [
     "type",
@@ -72,9 +70,7 @@ CHUNK_SIZE = 100_000
 TOP_N = 30
 
 
-# ============================================================
-# 3. Statistics containers
-# ============================================================
+# 3. 統計容器
 
 numeric_stats = {
     column: {
@@ -100,19 +96,7 @@ category_stats = {
 }
 
 
-# ============================================================
-# 4. date_complete statistics
-# ============================================================
-#
-# 先不急著 parse 成日期。
-#
-# 這次只確認：
-# - missing
-# - zero
-# - min / max
-# - raw digit length
-#
-# 跑完後再根據實際格式決定 conversion rule。
+# 4. date_complete 統計；先確認缺值、0、範圍與位數，再決定轉換規則。
 
 date_stats = {
     "rows": 0,
@@ -125,22 +109,8 @@ date_stats = {
 }
 
 
-# ============================================================
-# 5. note statistics
-# ============================================================
-#
-# note 是 free text。
-#
-# 不把所有 unique note 存進 Counter，
-# 避免大量不同文字占 RAM。
-#
-# 先回答兩件事情：
-#
-# 1. 有備註的比例到底多少？
-# 2. 備註大概涉及哪些常見特殊情況？
-#
-# 以下 keyword classification 只是 profiling heuristic，
-# 不是最後 cleaning rule。
+# 5. note 是自由文字；只統計非空白比例與關鍵詞，不保存所有不重複文字。
+# 關鍵詞分類只供剖析，不作為清理規則。
 
 note_stats = {
     "rows": 0,
@@ -172,9 +142,7 @@ NOTE_PATTERNS = {
 note_pattern_counts = Counter()
 
 
-# ============================================================
-# 6. Helper
-# ============================================================
+# 6. 輔助函式
 
 def normalize_category(value):
     """
@@ -193,9 +161,7 @@ def normalize_category(value):
     return str(value).strip()
 
 
-# ============================================================
-# 7. Read .dta in chunks
-# ============================================================
+# 7. 分批讀取 `.dta`
 
 with pd.read_stata(
     DTA_PATH,
@@ -214,24 +180,14 @@ with pd.read_stata(
 
         print(f"Processing chunk {chunk_number:,}")
 
-        # ====================================================
-        # 8. House subset
-        # ====================================================
-        #
-        # room / hall / bath / elevator 等建物特徵
-        # 只在房地交易中判斷。
-        #
-        # 純土地沒有這些資料是正常的，
-        # 不應拿來計算 missing rate。
+        # 8. 建物子集；純土地不適用格局與電梯欄位，不納入缺值率。
 
         house = chunk[
             chunk["type"].isin(HOUSE_TYPES)
         ].copy()
 
 
-        # ====================================================
-        # 9. room / hall / bath
-        # ====================================================
+        # 9. room／hall／bath
 
         for column in NUMERIC_COLUMNS:
 
@@ -276,16 +232,13 @@ with pd.read_stata(
                         current_max,
                     )
 
-            # 格局一般 unique values 不會很多，
-            # 所以可以做 exact full-data frequency。
+            # 格局欄位種類少，可統計完整資料的精確頻率。
             numeric_stats[column]["value_counts"].update(
                 valid.astype(str).tolist()
             )
 
 
-        # ====================================================
-        # 10. categorical building fields
-        # ====================================================
+        # 10. 建物類別欄位
 
         for column in CATEGORY_COLUMNS:
 
@@ -326,9 +279,7 @@ with pd.read_stata(
             )
 
 
-        # ====================================================
         # 11. date_complete
-        # ====================================================
 
         date_series = pd.to_numeric(
             house["date_complete"],
@@ -376,16 +327,7 @@ with pd.read_stata(
                 )
 
 
-            # ------------------------------------------------
-            # 看 raw value 有幾位數
-            #
-            # 例如：
-            #
-            # 70101   → 5 digits
-            # 1010101 → 7 digits
-            #
-            # 先知道資料長什麼樣，再決定 parser。
-            # ------------------------------------------------
+            # 統計原始值位數，供後續選擇解析規則。
 
             integer_dates = (
                 positive_dates
@@ -406,12 +348,7 @@ with pd.read_stata(
             )
 
 
-        # ====================================================
-        # 12. note
-        # ====================================================
-        #
-        # note 對 canonical 保留的三種 transaction types
-        # 都可能有意義，因此這裡不像格局只看房地。
+        # 12. note 對三種保留交易類型都可能有意義，因此不只檢查房地。
 
         note_subset = chunk[
             chunk["type"].isin(KEEP_TYPES)
@@ -437,9 +374,7 @@ with pd.read_stata(
         )
 
 
-        # ----------------------------------------------------
-        # Keyword profiling
-        # ----------------------------------------------------
+        # 統計備註關鍵詞的出現次數。
 
         nonblank_notes = note_text[
             ~blank_mask
@@ -458,9 +393,7 @@ with pd.read_stata(
             )
 
 
-# ============================================================
-# 13. Numeric summary
-# ============================================================
+# 13. 數值摘要
 
 numeric_rows = []
 
@@ -498,9 +431,7 @@ numeric_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 14. Top values
-# ============================================================
+# 14. 常見值
 
 top_rows = []
 
@@ -550,9 +481,7 @@ top_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 15. Categorical summary
-# ============================================================
+# 15. 類別摘要
 
 category_rows = []
 
@@ -586,9 +515,7 @@ category_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 16. date_complete summary
-# ============================================================
+# 16. date_complete 摘要
 
 date_summary_df = pd.DataFrame(
     [
@@ -629,9 +556,7 @@ date_length_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 17. note summary
-# ============================================================
+# 17. note 摘要
 
 note_df = pd.DataFrame(
     [
@@ -669,9 +594,7 @@ note_pattern_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 18. Save outputs
-# ============================================================
+# 18. 儲存輸出
 
 numeric_df.to_csv(
     OUTPUT_DIR / "remaining_house_numeric_summary.csv",
@@ -716,9 +639,7 @@ note_pattern_df.to_csv(
 )
 
 
-# ============================================================
-# 19. Print
-# ============================================================
+# 19. 顯示結果
 
 print("\nNumeric fields:")
 print(numeric_df.to_string(index=False))

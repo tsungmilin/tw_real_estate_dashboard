@@ -1,1 +1,1 @@
-"""Reference-data builders and validators."""
+"""建立並驗證專案使用的參照資料。"""

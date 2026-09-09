@@ -1,7 +1,7 @@
 [project]
 name = "taiwan-real-estate-dashboard"
 version = "0.1.0"
-description = "Reproducible cleaning pipeline for Taiwan real-estate transaction data"
+description = "Reproducible data pipeline and Tableau dashboard for Taiwan real-estate transactions"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [

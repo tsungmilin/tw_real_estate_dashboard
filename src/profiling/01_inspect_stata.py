@@ -1,11 +1,11 @@
+"""Inspect Stata metadata and a small sample without loading the full source file."""
+
 from pathlib import Path
 
 import pandas as pd
 
 
-# 找到 project root：
-# dashboard/src/profiling/01_inspect_stata.py
-# 往上兩層就是 dashboard/
+# 從程式位置取得專案根目錄，不依賴執行時的工作目錄。
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DTA_PATH = (
@@ -16,8 +16,7 @@ DTA_PATH = (
 )
 
 
-# iterator=True：
-# 不直接把整個 14 GB .dta 讀進記憶體
+# 只讀取中繼資料，不將 14 GB 的 `.dta` 載入記憶體。
 with pd.read_stata(
     DTA_PATH,
     iterator=True,

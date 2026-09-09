@@ -1,4 +1,4 @@
-"""Build the versioned district lookup from the two approved source files."""
+"""以兩份核准來源建立版本化的行政區對照表。"""
 
 from __future__ import annotations
 

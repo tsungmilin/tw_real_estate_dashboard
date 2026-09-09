@@ -1,12 +1,12 @@
+"""Profile price and area validity, distributions, and formula consistency."""
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 
-# ============================================================
-# 1. Paths
-# ============================================================
+# 1. 路徑
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,16 +29,7 @@ OUTPUT_DIR.mkdir(
 )
 
 
-# ============================================================
-# 2. Columns
-# ============================================================
-#
-# type 雖然不是這次主要 profile 的 column，
-# 但需要用它把交易分成：
-#
-# 房地(土地+建物)
-# 房地(土地+建物)+車位
-# 土地
+# 2. 欄位；type 用來區分房地、房地＋車位與土地交易。
 
 COLUMNS = [
     "type",
@@ -62,9 +53,7 @@ NUMERIC_COLUMNS = [
 CHUNK_SIZE = 100_000
 
 
-# ============================================================
-# 3. Canonical transaction types currently retained
-# ============================================================
+# 3. 標準資料保留的交易類型
 
 KEEP_TYPES = {
     "房地(土地+建物)",
@@ -76,28 +65,12 @@ HOUSE_TYPE = "房地(土地+建物)"
 HOUSE_PARKING_TYPE = "房地(土地+建物)+車位"
 
 
-# ============================================================
-# 4. Validation tolerance
-# ============================================================
-#
-# np.isclose() 用來判斷兩個計算結果是否「足夠接近」。
-#
-# atol=1:
-# 允許每平方公尺單價相差 1 元。
-#
-# rtol=0:
-# 不另外允許百分比誤差。
-#
-# 例如：
-# 100000 與 100001 → 視為一致
-# 100000 與 100010 → 不一致
+# 4. 單價只允許每平方公尺 ±1 元的絕對誤差，不另加比例誤差。
 
 PRICE_ATOL = 1
 
 
-# ============================================================
-# 5. Statistics containers
-# ============================================================
+# 5. 統計容器
 
 stats = {
     column: {
@@ -112,7 +85,7 @@ stats = {
 }
 
 
-# Formula validation counters
+# 公式驗證計數
 
 ping_validation = {
     "comparable": 0,
@@ -134,25 +107,13 @@ parking_validation = {
 }
 
 
-# ============================================================
-# 6. Optional sample for percentiles
-# ============================================================
-#
-# 精確 percentile 必須保留大量數值到 memory。
-#
-# 目前 profiling 的目標不是精確統計推論，
-# 所以每個 chunk 固定抽最多 2,000 rows，
-# 最後用 sample 算 p1 / median / p99。
-#
-# random_state 固定後：
-# 每次執行會得到可重現的 sampling 結果。
+# 6. 每批固定抽樣最多 2,000 筆，近似計算 p1／中位數／p99；
+# 固定 random_state 以便重現，並避免保留全部數值。
 
 sample_chunks = []
 
 
-# ============================================================
-# 7. Read raw .dta in chunks
-# ============================================================
+# 7. 分批讀取原始 `.dta`
 
 with pd.read_stata(
     DTA_PATH,
@@ -170,27 +131,14 @@ with pd.read_stata(
             f"Processing chunk {chunk_number:,}"
         )
 
-        # ----------------------------------------------------
-        # 7.1 Keep only transaction types currently planned
-        #     for canonical dataset
-        # ----------------------------------------------------
+        # 7.1 只保留標準資料預定納入的交易類型
 
         chunk = chunk[
             chunk["type"].isin(KEEP_TYPES)
         ].copy()
 
 
-        # ----------------------------------------------------
-        # 7.2 Convert target fields to numeric
-        # ----------------------------------------------------
-        #
-        # errors="coerce":
-        #
-        # 如果遇到不能轉 numeric 的 value，
-        # 不讓程式 crash，而是轉成 NaN。
-        #
-        # profiling 階段這樣可以一起看出
-        # 是否存在格式異常。
+        # 7.2 目標欄位無法轉為數值時設為 NaN，並納入格式異常統計。
 
         for column in NUMERIC_COLUMNS:
             chunk[column] = pd.to_numeric(
@@ -199,9 +147,7 @@ with pd.read_stata(
             )
 
 
-        # ----------------------------------------------------
-        # 7.3 Basic numeric profiling
-        # ----------------------------------------------------
+        # 7.3 基本數值剖析
 
         for column in NUMERIC_COLUMNS:
 
@@ -243,9 +189,7 @@ with pd.read_stata(
                     )
 
 
-        # ----------------------------------------------------
-        # 7.4 Sample for approximate percentiles
-        # ----------------------------------------------------
+        # 7.4 抽樣估計百分位數
 
         if len(chunk) > 0:
 
@@ -264,15 +208,7 @@ with pd.read_stata(
             )
 
 
-        # ====================================================
-        # 8. Validate h_price_pin
-        # ====================================================
-        #
-        # Expected:
-        #
-        # h_price_pin
-        # ≈
-        # h_price_m2 × 3.305785
+        # 8. 驗證 h_price_pin ≈ h_price_m2 × 3.305785
 
         ping_mask = (
             chunk["h_price_m2"].notna()
@@ -310,17 +246,8 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 9. Validate transactions WITHOUT parking
-        # ====================================================
-        #
-        # 房地(土地+建物)
-        #
-        # Expected:
-        #
-        # h_price_m2
-        # ≈
-        # housing_totprice / trans_size
+        # 9. 驗證無車位房地交易的單價公式
+        # h_price_m2 ≈ housing_totprice / trans_size
 
         house_mask = (
             (chunk["type"] == HOUSE_TYPE)
@@ -365,9 +292,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 10. Parking completeness
-        # ====================================================
+        # 10. 車位欄位完整性
 
         parking_rows = chunk[
             chunk["type"] == HOUSE_PARKING_TYPE
@@ -406,15 +331,7 @@ with pd.read_stata(
         ] += int(both_valid.sum())
 
 
-        # ====================================================
-        # 11. Validate parking-adjusted unit price
-        # ====================================================
-        #
-        # Expected:
-        #
-        # (total_price - parking_price)
-        # --------------------------------
-        # (building_area - parking_area)
+        # 11. 驗證扣除車位價格與面積後的單價
 
         formula_mask = (
             (chunk["type"] == HOUSE_PARKING_TYPE)
@@ -486,9 +403,7 @@ with pd.read_stata(
         )
 
 
-# ============================================================
-# 12. Build numeric summary
-# ============================================================
+# 12. 建立數值摘要
 
 summary_rows = []
 
@@ -517,9 +432,7 @@ for column, values in stats.items():
 summary_df = pd.DataFrame(summary_rows)
 
 
-# ============================================================
-# 13. Approximate percentiles
-# ============================================================
+# 13. 近似百分位數
 
 sample_df = pd.concat(
     sample_chunks,
@@ -554,9 +467,7 @@ percentile_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 14. Formula validation summary
-# ============================================================
+# 14. 公式驗證摘要
 
 validation_rows = [
     {
@@ -599,9 +510,7 @@ validation_df["match_rate"] = (
 )
 
 
-# ============================================================
-# 15. Parking completeness summary
-# ============================================================
+# 15. 車位欄位完整性摘要
 
 parking_total = parking_validation[
     "parking_type_rows"
@@ -643,9 +552,7 @@ parking_df = pd.DataFrame(
 )
 
 
-# ============================================================
-# 16. Save outputs
-# ============================================================
+# 16. 儲存輸出
 
 summary_df.to_csv(
     OUTPUT_DIR / "price_area_summary.csv",
@@ -672,9 +579,7 @@ parking_df.to_csv(
 )
 
 
-# ============================================================
-# 17. Print
-# ============================================================
+# 17. 顯示結果
 
 print("\nNumeric summary:")
 print(summary_df.to_string(index=False))

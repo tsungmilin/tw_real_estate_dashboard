@@ -1,12 +1,12 @@
+"""Analyze five-digit completion dates and dates later than their transactions."""
+
 from collections import Counter
 from pathlib import Path
 
 import pandas as pd
 
 
-# ============================================================
-# 1. Paths
-# ============================================================
+# 1. 路徑
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,9 +29,7 @@ SUMMARY_DIR.mkdir(
 )
 
 
-# ============================================================
-# 2. Columns
-# ============================================================
+# 2. 欄位
 
 COLUMNS = [
     "type",
@@ -53,9 +51,7 @@ HOUSE_TYPES = {
 CHUNK_SIZE = 100_000
 
 
-# ============================================================
-# 3. Containers
-# ============================================================
+# 3. 統計容器
 
 five_digit_years = Counter()
 five_digit_building_types = Counter()
@@ -74,9 +70,7 @@ five_digit_examples = []
 MAX_EXAMPLES = 50
 
 
-# ============================================================
-# 4. Read data
-# ============================================================
+# 4. 讀取資料
 
 with pd.read_stata(
     DTA_PATH,
@@ -97,8 +91,7 @@ with pd.read_stata(
             f"Processing chunk {chunk_number:,}"
         )
 
-        # 房屋 completion date
-        # 對純土地沒有分析意義。
+        # 完工日只適用房屋，純土地不納入分析。
         house = chunk[
             chunk["type"].isin(HOUSE_TYPES)
         ].copy()
@@ -108,7 +101,7 @@ with pd.read_stata(
             errors="coerce",
         )
 
-        # 只看 positive integer-like values
+        # 只檢查近似正整數的值。
         valid = raw_date[
             raw_date > 0
         ].round().astype("Int64")
@@ -124,22 +117,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 5. Five-digit values
-        # ============================================================
-        #
-        # 假設：
-        #
-        # 60101
-        #
-        # 前面：
-        # 6 = ROC year
-        #
-        # 後四碼：
-        # 0101 = Jan 1
-        #
-        # 這次不是直接相信它，
-        # 而是看這些 rows 的 context 是否合理。
+        # 5. 五位數值；測試前置數字為民國年、後四碼為 MMDD 的假設。
 
         five_mask = (
             digit_length == 5
@@ -204,12 +182,10 @@ with pd.read_stata(
             )
 
 
-            # -----------------------------------------------
             # 保留少量 aggregate-safe examples。
             #
             # address 沒有讀進來，
             # 所以不會輸出具體門牌。
-            # -----------------------------------------------
 
             if (
                 len(five_digit_examples)
@@ -268,14 +244,7 @@ with pd.read_stata(
                     )
 
 
-        # ====================================================
-        # 6. Parse completion year/month
-        # ============================================================
-        #
-        # 只處理至少 5 digits。
-        #
-        # 前面 digits = ROC year
-        # 最後四碼 = MMDD
+        # 6. 解析至少五位的完工日期：前置數字為民國年，最後四碼為 MMDD。
 
         parse_mask = (
             digit_length >= 5
@@ -310,9 +279,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 7. Calendar validation
-        # ============================================================
+        # 7. 曆法日期驗證
 
         gregorian_year = (
             roc_year + 1911
@@ -348,9 +315,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 8. Transaction year/month
-        # ============================================================
+        # 8. 交易年月
 
         trans_year = pd.to_numeric(
             house.loc[
@@ -383,23 +348,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 9. Calculate month difference
-        # ============================================================
-        #
-        # 不需要完整 transaction day。
-        #
-        # 因為我們只想知道：
-        #
-        # completion month
-        # 比 transaction month
-        # 晚多少個月。
-        #
-        # 公式：
-        #
-        # (year difference × 12)
-        # +
-        # month difference
+        # 9. 計算完工年月與交易年月的月份差，不需要完整交易日。
 
         completion_year_compare = (
             roc_year.loc[
@@ -439,7 +388,7 @@ with pd.read_stata(
         )
 
 
-        # completion after transaction
+        # 完工日晚於交易日
         future_mask = (
             month_gap > 0
         )
@@ -459,9 +408,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 10. Gap distribution
-        # ============================================================
+        # 10. 月份差分布
 
         future_gap_groups[
             "1_3_months"
@@ -515,9 +462,7 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # 11. Future completion characteristics
-        # ============================================================
+        # 11. 交易後完工資料特徵
 
         future_by_building_type.update(
             house.loc[
@@ -566,9 +511,7 @@ with pd.read_stata(
         )
 
 
-# ============================================================
-# 12. Output helpers
-# ============================================================
+# 12. 輸出輔助函式
 
 def counter_to_df(
     counter,
@@ -596,9 +539,7 @@ def counter_to_df(
     return pd.DataFrame(rows)
 
 
-# ============================================================
-# 13. Build outputs
-# ============================================================
+# 13. 建立輸出
 
 five_year_df = counter_to_df(
     five_digit_years,
@@ -651,9 +592,7 @@ future_note_df = counter_to_df(
 )
 
 
-# ============================================================
-# 14. Save
-# ============================================================
+# 14. 儲存輸出
 
 five_year_df.to_csv(
     SUMMARY_DIR
@@ -719,9 +658,7 @@ future_note_df.to_csv(
 )
 
 
-# ============================================================
-# 15. Print
-# ============================================================
+# 15. 顯示結果
 
 print("\n5-digit ROC completion years:")
 print(five_year_df.to_string(index=False))

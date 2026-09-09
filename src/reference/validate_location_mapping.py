@@ -1,4 +1,4 @@
-"""Validate raw location mapping and six-municipality name transitions."""
+"""驗證原始行政區對應與六都歷史名稱轉換。"""
 
 from __future__ import annotations
 

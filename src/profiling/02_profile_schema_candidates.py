@@ -1,17 +1,14 @@
+"""Profile candidate key, date, and land-area fields into a public summary."""
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 
-# ============================================================
-# 1. Project paths
-# ============================================================
+# 專案路徑
 
-# __file__ 是目前這支 .py 的位置：
-# dashboard/src/profiling/02_validate_key_fields.py
-#
-# parents[2] 往上兩層就是 dashboard/
+# 從程式位置解析專案根目錄，不依賴執行時的工作目錄。
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DTA_PATH = (
@@ -32,19 +29,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH = OUTPUT_DIR / "key_fields_validation.csv"
 
 
-# ============================================================
-# 2. Columns that we actually need
-# ============================================================
-#
-# 這次不是完整 profiling。
-# 我們只回答目前會影響 schema design 的三組問題：
-#
-# A. year / trans_y / trans_m / trans_d / date_trans 的關係
-# B. no 是否有 missing，以及是否有明顯 duplicate 問題
-# C. trans_landsize / landtotarea / landtransarea1~5 的關係
-#
-# 使用 columns= 可以避免把另外五十多個 columns
-# 一起建立成 DataFrame，降低每個 chunk 的 RAM 使用量。
+# 只讀取日期、來源 ID 與土地面積欄位，降低每批記憶體用量。
 
 DATE_COLUMNS = [
     "year",
@@ -71,48 +56,22 @@ LAND_COLUMNS = [
 COLUMNS = DATE_COLUMNS + ID_COLUMNS + LAND_COLUMNS
 
 
-# ============================================================
-# 3. Chunk size
-# ============================================================
-#
-# 不可以直接把 14 GB .dta 全部讀進 RAM。
-#
-# 每次讀 100,000 rows。
-# 因為這次只有 13 個 columns，100k 是一個合理起點。
-#
-# 注意：
-# chunksize 只控制一次放多少資料進 RAM，
-# 並不代表 pandas 不需要掃完整個 .dta。
+# 分批限制記憶體用量，但仍會掃描完整 `.dta`。
 CHUNK_SIZE = 100_000
 
 
-# ============================================================
-# 4. Counters
-# ============================================================
+# 彙總計數
 
 total_rows = 0
 
-# ----- no -----
+# 來源 ID
 no_missing = 0
 
-# 這裡只能檢查「同一個 chunk 內」的 duplicates。
-#
-# 不能因此宣稱 no 在整份資料 globally unique，
-# 因為：
-#
-# chunk 1 可能有 no = A
-# chunk 2 也可能有 no = A
-#
-# 但兩個 chunk 各自都看不出 duplicate。
-#
-# 如果要做 exact global uniqueness，
-# 後面應該用 PostgreSQL UNIQUE / GROUP BY，
-# 或其他 disk-backed 方法，而不是把所有 no
-# 塞進 Python set，避免大量 RAM 消耗。
+# 這裡只檢查批內重複；全域唯一性由磁碟型流程另行驗證。
 no_duplicates_within_chunks = 0
 
 
-# ----- date fields -----
+# 日期欄位
 
 year_min = None
 year_max = None
@@ -127,7 +86,7 @@ year_trans_y_comparable = 0
 year_trans_y_equal = 0
 
 
-# ----- land fields -----
+# 土地欄位
 
 land_pair_comparable = 0
 land_pair_equal = 0
@@ -144,62 +103,7 @@ land_detail_non_null = {
 }
 
 
-# ============================================================
-# 5. Read .dta in chunks
-# ============================================================
-#
-# Stata / pandas 有幾個重要讀取設定：
-#
-# convert_categoricals=False
-# --------------------------------
-# 不讓 pandas 自動把 Stata value labels 轉成 categorical。
-#
-# 原因：
-# 1. 我們現在是在做 raw profiling。
-# 2. pandas 官方也提醒，iterator 讀 categorical 時，
-#    不同 chunk 可能得到不同 categories / dtype。
-#
-#
-# convert_dates=False
-# --------------------------------
-# 不讓 pandas 自動把具有 Stata date format 的 numeric values
-# 直接轉成 pandas datetime。
-#
-# 我們現在要先知道 raw data 是怎麼存的，
-# 再決定 canonical cleaning rule。
-#
-#
-# convert_missing=False
-# --------------------------------
-# Stata 有：
-#
-# .
-# .a
-# .b
-# ...
-# .z
-#
-# 這些 extended missing values。
-#
-# convert_missing=False 時，
-# pandas 會把它們轉成 NaN。
-#
-# 優點：
-# - RAM / datatype 比較容易控制
-# - 後面的 numeric calculation 比較容易
-#
-# 缺點：
-# - 我們會失去 . / .a / .b ... 之間的差異
-#
-# 如果後面發現某個欄位利用 extended missing
-# 表示不同意義，我們再另外用 convert_missing=True
-# 做針對性檢查。
-#
-#
-# preserve_dtypes=True
-# --------------------------------
-# 儘量保留原本 Stata numeric datatype，
-# 而不是全部升級成 int64 / float64。
+# 保留原始儲存型別，不預先轉換標籤與日期；Stata 延伸缺失值統一視為 NaN。
 
 with pd.read_stata(
     DTA_PATH,
@@ -223,23 +127,19 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # A. Validate "no"
-        # ====================================================
+        # A. 驗證來源 ID
 
         no_missing += int(chunk["no"].isna().sum())
 
-        # 注意：這只是 within-chunk duplicates。
+        # 此處只檢查批次內重複；跨批次重複另由全域檢查處理。
         no_duplicates_within_chunks += int(
             chunk["no"].duplicated(keep=False).sum()
         )
 
 
-        # ====================================================
-        # B. Inspect date-related fields
-        # ====================================================
+        # B. 檢查日期相關欄位
 
-        # ----- year -----
+        # year
 
         current_year_min = chunk["year"].min(skipna=True)
         current_year_max = chunk["year"].max(skipna=True)
@@ -253,7 +153,7 @@ with pd.read_stata(
                 year_max = current_year_max
 
 
-        # ----- trans_y -----
+        # trans_y
 
         current_trans_y_min = chunk["trans_y"].min(skipna=True)
         current_trans_y_max = chunk["trans_y"].max(skipna=True)
@@ -267,12 +167,7 @@ with pd.read_stata(
                 trans_y_max = current_trans_y_max
 
 
-        # ----- month -----
-        #
-        # 現在只做最基本的 range validation。
-        #
-        # 1~12 合理。
-        # missing 不算 invalid。
+        # month：只檢查 1–12；缺值另計，不視為超出範圍。
 
         invalid_month = (
             chunk["trans_m"].notna()
@@ -282,16 +177,7 @@ with pd.read_stata(
         invalid_month_rows += int(invalid_month.sum())
 
 
-        # ----- day -----
-        #
-        # 目前只檢查 1~31。
-        #
-        # 這還不能抓出：
-        # 2/31
-        # 4/31
-        #
-        # 因為我們現在還沒確認 year 的 calendar 定義，
-        # 所以先不要擅自組成 datetime。
+        # 本剖析步驟只檢查 day 是否介於 1–31；完整曆法日期由後續驗證處理。
 
         invalid_day = (
             chunk["trans_d"].notna()
@@ -301,10 +187,7 @@ with pd.read_stata(
         invalid_day_rows += int(invalid_day.sum())
 
 
-        # ----- year vs trans_y -----
-        #
-        # 先檢查兩者在 raw data 中是否相等，
-        # 不先假設哪一個才是真正 transaction year。
+        # 比較 year 與 trans_y，不預設哪個才是交易年。
 
         comparable = (
             chunk["year"].notna()
@@ -321,13 +204,9 @@ with pd.read_stata(
         )
 
 
-        # ====================================================
-        # C. Land-area relationships
-        # ====================================================
+        # C. 土地面積關係
 
-        # ----------------------------------------------------
         # trans_landsize vs landtotarea
-        # ----------------------------------------------------
 
         comparable = (
             chunk["trans_landsize"].notna()
@@ -336,13 +215,7 @@ with pd.read_stata(
 
         land_pair_comparable += int(comparable.sum())
 
-        # 浮點數不要直接用 ==
-        #
-        # 例如理論上都是 10.1，
-        # binary floating point representation
-        # 有時可能出現極小差異。
-        #
-        # 目前允許 0.01 平方公尺的 absolute tolerance。
+        # 浮點比較允許 0.01 平方公尺誤差。
         equal = np.isclose(
             chunk.loc[comparable, "trans_landsize"],
             chunk.loc[comparable, "landtotarea"],
@@ -353,9 +226,7 @@ with pd.read_stata(
         land_pair_equal += int(equal.sum())
 
 
-        # ----------------------------------------------------
         # landtransarea1 ~ landtransarea5
-        # ----------------------------------------------------
 
         detail_columns = [
             "landtransarea1",
@@ -371,22 +242,14 @@ with pd.read_stata(
             )
 
 
-        # min_count=1：
-        #
-        # 如果 landtransarea1~5 全部 missing，
-        # 結果保持 NaN。
-        #
-        # 不希望：
-        # NaN + NaN + ... 被錯誤視為 0。
+        # 明細全缺時維持 NaN，避免誤判為面積 0。
         detail_sum = chunk[detail_columns].sum(
             axis=1,
             min_count=1,
         )
 
 
-        # ----------------------------------------------------
         # trans_landsize vs detail sum
-        # ----------------------------------------------------
 
         comparable = (
             chunk["trans_landsize"].notna()
@@ -405,9 +268,7 @@ with pd.read_stata(
         trans_vs_detail_equal += int(equal.sum())
 
 
-        # ----------------------------------------------------
         # landtotarea vs detail sum
-        # ----------------------------------------------------
 
         comparable = (
             chunk["landtotarea"].notna()
@@ -426,9 +287,7 @@ with pd.read_stata(
         landtot_vs_detail_equal += int(equal.sum())
 
 
-# ============================================================
-# 6. Helper function
-# ============================================================
+# 6. 輔助函式
 
 def safe_rate(numerator, denominator):
     """
@@ -440,9 +299,7 @@ def safe_rate(numerator, denominator):
     return numerator / denominator
 
 
-# ============================================================
-# 7. Build validation summary
-# ============================================================
+# 7. 建立驗證摘要
 
 results = [
     {
@@ -529,9 +386,7 @@ result_df.to_csv(
 )
 
 
-# ============================================================
-# 8. Print results
-# ============================================================
+# 8. 顯示結果
 
 print("\n")
 print("=" * 60)

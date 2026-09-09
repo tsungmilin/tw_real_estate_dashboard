@@ -23,6 +23,9 @@ def test_location_lookup_contract() -> None:
     assert not lookup.isna().any().any()
     assert lookup["county_id"].str.fullmatch(r"\d{5}").all()
     assert lookup["town_id"].str.fullmatch(r"\d{8}").all()
+    assert lookup["county_id"].nunique() == 22
+    assert lookup["city"].nunique() == 22
+    assert len(lookup[["county_id", "city"]].drop_duplicates()) == 22
     assert not lookup.duplicated(["legacy_county_code", "district"]).any()
     assert not lookup.duplicated(["county_id", "town_id"]).any()
 
