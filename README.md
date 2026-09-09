@@ -4,6 +4,8 @@
 
 這個專案不只展示儀表板，也展示資料剖析、清理契約、批次追蹤、資料倉儲建模、增量更新與發布驗證如何共同支撐可信的分析結果。
 
+[開啟 Tableau Public 互動式 Dashboard](https://public.tableau.com/app/profile/tsungmi.lin/viz/housing_portfolio/sheet17)
+
 ## 專案現況
 
 | 項目 | 目前狀態 |
