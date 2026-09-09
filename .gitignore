@@ -25,5 +25,14 @@ __pycache__/
 # Environment / secrets
 .env
 
+# Local Tableau development and intermediate files
+*.twbr
+*.hyper
+/housing.twb
+/housing_final.twbx
+
 # Local row-level profiling outputs
 /profiling_output/private/
+
+# Local project handoff and restart notes
+/docs/private/

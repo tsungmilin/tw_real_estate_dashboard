@@ -1,106 +1,82 @@
-# Project status
+# 專案進度
 
-- **Updated:** 2026-08-27
-- **Current phase:** Block 2 — Python Cleaning / Ingestion
-- **Current milestone:** Implement Cleaning Specification v1 and reproduce the accepted baseline
+- **更新日期：** 2026-09-09
+- **目前階段：** 作品集 v1 完成
 
-## 1. Completed
+本文件只保存會隨專案推進而改變的資料快照、驗收結果與未來發展。穩定架構、清理規則、資料庫操作與 KPI 定義由各自的權威文件維護。
 
-### Raw profiling
+## 1. 目前快照
 
-- 檢查 63 個 Stata columns、types、labels 與樣本。
-- 以 100,000-row chunks 完成全資料 profiling。
-- 驗證 `no` 在 4,380,208 rows 中無 missing、無 duplicate。
-- 完成 transaction dates、location、price、area、parking、building attributes、completion date 與 note targeted checks。
-- Aggregate profiling outputs 已保存於 `profiling_output/summary/`。
-- Profiling v1 對應的 raw SHA-256 為 `1d81eb74a5c7f3607b93966732b90a7e3b8cdf5debacf905b67e1afab86b25b2`；scripts、方法與重跑條件見 [`src/profiling/README.md`](../src/profiling/README.md)。
-
-### Design
-
-- Canonical period 定為 2012-08 至 2024-12。
-- 保留房地、房地+車位、土地三種 transaction types。
-- 完成 368-row location lookup reconciliation design。
-- 已產生 368-row `location_lookup.csv` 與 3-row `location_aliases.csv`；六都及 97-row unmapped baseline 均通過驗證。
-- 完成 row exclusion precedence、null semantics、quality flags 與 audit rules。
-- [Cleaning Specification v1](cleaning_spec_v1.md) 已完成設計，待實作驗證。
-- [Canonical schema](canonical-schema.md) 已整理為詳細 data contract。
-
-### Reproducible environment
-
-- 專案 Python 固定為 3.13.3，使用 project-local `.venv`，不改動系統 Python。
-- `pyproject.toml` 記錄直接 dependencies；`requirements.lock` 固定已驗證的完整套件版本。
-- `numpy`、`pandas`、`openpyxl`、`pyarrow` 與 `pytest` 已安裝並通過 dependency、reference build 與測試。
-
-## 2. Current-source baseline
-
-| Stage / reason | Rows |
+| 項目 | 已驗證結果 |
 |---|---:|
-| Raw input | 4,380,208 |
-| `missing_source_transaction_id` | 0 |
-| Same-run duplicates | 0 |
-| `invalid_transaction_period` | 34,519 |
-| `unmapped_location` | 97 |
-| `excluded_transaction_type` | 84,126 |
-| Total excluded | 118,742 |
-| Expected clean | 4,261,466 |
+| 原始資料 | 4,380,208 筆、63 欄、14,682,511,713 bytes |
+| 原始資料期間 | 2012–2024 |
+| 標準清理期間 | 2012-08 至 2024-12 |
+| 清理後資料 | 4,261,466 筆 |
+| 排除資料 | 118,742 筆 |
+| 價格完整房屋交易 | 3,119,648 筆 |
+| `staging.stg_transactions` | 4,261,466 筆 |
+| `core.fact_transactions` | 4,261,466 筆 |
+| `analytics.national_monthly_kpi` | 144 列 |
+| `analytics.city_monthly_kpi` | 3,168 列 |
+| `analytics.district_rolling_3m` | 52,256 列 |
+| 分析發布期間 | 2012-08 至 2024-07 |
+| 一般測試 | 71 passed |
+| 一次性 PostgreSQL 整合測試 | 4 passed |
 
-```text
-4,380,208 = 4,261,466 + 118,742
-```
+原始檔 SHA-256 為 `1d81eb74a5c7f3607b93966732b90a7e3b8cdf5debacf905b67e1afab86b25b2`。清理後來源 ID 唯一，且 `4,380,208 = 4,261,466 + 118,742`。詳細排除原因與品質分布以 `data/audit/` 的最新成功報告為準。
 
-這些精確筆數適用於目前 raw source checksum 與已驗證 lookup。未來來源變動時，schema、uniqueness 與 reconciliation 仍是 hard gates，精確 counts 則作 comparison baseline。
+| 主要排除原因 | 筆數 |
+|---|---:|
+| 非標準交易期間 | 34,519 |
+| 行政區無法對應 | 97 |
+| 不納入的交易類型 | 84,126 |
+| 缺少來源 ID／重複 ID | 0 |
 
-## 3. Next milestone
+完整 audit 含逐次執行資訊，因此只保留在本機；公開文件以本節摘要呈現已驗證基準。
 
-實作單一正式 cleaning entry point，產出：
+## 2. 已完成成果
 
-```text
-data/processed/transactions_clean.parquet
-data/processed/transactions_excluded.parquet
-data/audit/cleaning_run_<cleaning_run_id>.json
-```
+| 區塊 | 成果 |
+|---|---|
+| 1. 資料剖析 | 完整掃描來源、驗證欄位候選、價格與面積公式、日期異常及行政區對應 |
+| 2. 清理與稽核 | Python 分批清理、清理後／排除 Parquet、品質標記、發布檢核與 audit |
+| 3. PostgreSQL `staging` | UPSERT-only 載入、載入紀錄、來源對帳與月份變更追蹤 |
+| 4. PostgreSQL `core` | 行政區與建物型態維度、交易事實表、初始化與批次同步 |
+| 5. PostgreSQL `analytics` | 全國、縣市與行政區三張分析表，支援完整與增量更新 |
+| 6. Tableau | 完成「台灣房市月度概覽」與「縣市房價分析」兩頁 |
+| 7. 交付驗收 | 即時版與可攜版內容一致；Hyper 已內嵌並通過 PostgreSQL 停止時的離線操作測試 |
+| 8. 文件整理 | README、架構、Dashboard 規格、進度與決策已依權威範圍重新同步 |
+| 9. 作品集素材 | 兩頁 Dashboard 高解析度截圖已加入 README；MOI 官方來源與更新頻率已補齊 |
 
-完成條件：
+## 3. Tableau 驗收狀態
 
-- Full run 通過 cleaning spec 所有 hard-fail publication gates。
-- 重現目前 clean／excluded baseline。
-- Clean ID non-null and unique。
-- Output schema 與 canonical data contract 一致。
-- 三份 output 可讀回並通過 row-count reconciliation。
-- 相同 source checksum 的重跑結果可重現。
-
-## 4. Immediate work
-
-1. 實作 chunked raw reader 與 required-schema check。
-2. 實作 exclusion precedence 與 duplicate handling。
-3. 實作 canonical transformations and flags。
-4. 實作 clean／excluded writers 與 audit collector。
-5. 建立 automated tests and full-run publication gates。
-6. 第一版 full run 通過後補上正式 cleaning 執行指令。
-
-## 5. Repository state after Profiling v1 closeout
-
-- Profiling scripts 已依 01–09 集中於 `src/profiling/`，用途、方法、輸出與重跑條件都有獨立說明。
-- Aggregate results 保存在 `profiling_output/summary/`；row-level extracts 與暫存 SQLite 保存在 ignored local paths。
-- Raw `.dta`、processed Parquet、cleaning audit、private profiling outputs 與本機環境檔不提交 Git。
-- Python environment 與 dependency lock 已完成；正式 cleaning 執行指令仍待 pipeline 實作。
-
-## 6. Later phases
-
-| Block | Scope | Status |
+| 交付物 | 狀態 | 備註 |
 |---|---|---|
-| 1 | Data profiling / schema design | Completed |
-| 2 | Python cleaning / ingestion | In progress |
-| 3 | PostgreSQL staging / loading | Planned |
-| 4 | Core dimensional model | Planned |
-| 5 | SQL analytics mart | Planned |
-| 6 | Tableau / portfolio presentation | Planned |
+| `housing_portfolio.twbx` | 完成 | 內嵌 Hyper，可離線切換頁面、月份、指標與縣市；作為正式作品集交付物 |
 
-## 7. Deferred decisions
+可攜版有 19 張工作表、兩個 Dashboard，與通過驗證的本機即時開發版本具有相同的計算欄位、參數與預設狀態。目前預設月份為 2024-07、主要縣市為臺北市；比較縣市預設為宜蘭縣、金門縣與花蓮縣。
 
-- PostgreSQL physical model、PK/FK/indexes、UPSERT strategy
-- Core partition necessity
-- Analytics-layer outlier thresholds
-- Monthly mart final metrics
-- Dashboard information architecture
-- Tableau presentation and portfolio narrative
+桌面版與離線操作已通過驗收。v1 以桌面版作品集展示為主，未將手機版面列為正式支援的交付範圍。
+
+## 4. 未來發展與展望
+
+目前作品集使用已驗證的固定資料快照。MOI 官方服務在每月 1、11、21 日更新，下一階段可直接使用官方買賣批次資料建立可持續更新流程：
+
+1. 建立正式來源清單，記錄下載時間、來源網址與版本。
+2. 以原始檔檢查碼與批次中繼資料保存每次取得的來源快照。
+3. 新增 MOI 欄位 adapter，維持既有 32 欄 clean Parquet 契約。
+4. 在清理前增加綱要漂移、欄位型別、分類新值與跨批次案件修訂檢查。
+5. 沿用現有 `load_batch_id`，將新增或修訂交易增量發布至 `staging`、`core` 與 `analytics`。
+6. 資料庫驗證通過後重新整理 Tableau extract，並保留來源發布期別與更新時間。
+7. 視部署環境評估排程、自動化測試、失敗通知與 Tableau Public／Server 更新方式。
+
+這項發展不改變 PostgreSQL 與 Tableau 的主要責任；重點是把「一次性可靠重建」延伸為「可監控的每月三次更新」。正式換源的界線與實作順序見 [資料來源與未來更新](data-sources.md)。
+
+## 5. 後續技術觀察
+
+- 只有實際查詢與維護成本證明有需要時，才考慮依時間分割 `core.fact_transactions`。
+- 若資料來源新增欄位或分類，先更新剖析與資料契約，再調整下游模型。
+- 若加入人口、所得或負擔能力指標，應建立新的來源契約與分析母體，不直接混入現有房屋交易 KPI。
+
+已接受的跨層決策見 [決策紀錄](decision-log.md)。
