@@ -1,55 +1,57 @@
 # 系統架構與技術規格
 
-本文件說明系統元件、資料層責任、跨層契約與批次追蹤。它只維護相對穩定的架構；目前資料筆數、發布月份與工作進度統一放在 [專案進度](project-status.md)，來源與發布頻率見 [資料來源與未來更新](data-sources.md)。
+本文件說明系統元件、資料層責任、跨層契約與批次追蹤。它只維護相對穩定的架構；目前資料筆數、發布月份與工作進度統一放在 [專案進度](project-status.md)，來源與發布頻率見 [資料來源與更新](data-sources.md)。
 
-若要查詢欄位與排除規則，見 [資料清理與欄位契約](data-contract.md)；若要執行或復原資料庫流程，見 [PostgreSQL 資料流程與操作](database-operations.md)；若要理解 KPI 與 Tableau 畫面，見 [分析指標與 Tableau Dashboard](analytics-dashboard.md)。
+若要查詢欄位與排除規則，見 [資料清理與欄位契約](data-contract.md)；若要執行或復原資料庫流程，見 [PostgreSQL 資料流程與操作](database-operations.md)；若要理解 KPI 與 Tableau 畫面，見 [分析指標與 Tableau 儀表板](analytics-dashboard.md)。
 
 ## 1. 系統目標
 
-系統將大型實價登錄 Stata 檔轉換為可追溯的分析資料集，並支援 Tableau 即時查詢與離線作品集展示。設計目標包括：
+系統以 DTA 建立初始實價登錄底稿，再接收內政部（MOI）官方買賣發布批次，轉換為可追溯的分析資料集，並支援 Tableau 即時查詢與離線作品集展示。設計目標包括：
 
 - 分批處理大型來源，避免一次載入全部資料。
 - 以明確契約決定資料列納入、排除、型別與 `NULL` 語意。
 - 保留可讀回、可對帳的 Parquet 檢查點與稽核證據。
 - 將接收、核心模型、分析聚合與視覺呈現分層。
 - 以批次 ID 串接資料更新，支援冪等重跑與失敗復原。
-- 讓 Tableau 不需掃描逐筆事實表即可回答 Dashboard 問題。
+- 讓 Tableau 不需掃描逐筆事實表即可回答儀表板問題。
 
 ## 2. 端到端資料流
 
 ```text
-data/raw/house_preowned_data_2.0.dta
-        │
-        ▼
-src/profiling/               探索來源與驗證假設
-        │
-        ▼
+DTA 初始底稿 ───────────────┐
+                            ├── 共通 24 欄原始欄位契約
+MOI 發布批次 ZIP             │
+        ↓                   │
+src/ingestion/ 檢查器／轉接器
+        │                   │
+        └───────────────────┘
+                            ▼
 src/cleaning/                分批清理、契約檢查與稽核
         │
-        ├── data/processed/transactions_clean.parquet
-        ├── data/processed/transactions_excluded.parquet
-        └── data/audit/cleaning_run_<id>.json
+        ├── DTA：data/processed/
+        └── MOI：data/processed/moi/<release_id>/、data/audit/moi/<release_id>/
         │
         ▼
 PostgreSQL
-├── staging                  接收、UPSERT、批次對帳
+├── staging                  接收、新增或更新、批次對帳
 ├── core                     一致化維度與交易事實
-└── analytics                Dashboard 專用 KPI
+└── analytics                儀表板專用 KPI
         │
         ├── 本機即時開發模式  PostgreSQL 唯讀連線
         └── housing_portfolio.twbx
              └── Hyper       離線可攜版
 ```
 
-資料剖析用來回答「來源實際長什麼樣」；清理契約決定「哪些資料進入正式資料集」。兩者分離，避免探索程式無意間成為正式業務規則。
+資料剖析用來回答「來源實際長什麼樣」；MOI 轉接器只隔離來源差異；清理契約決定「哪些資料進入正式資料集」。三者分離，避免來源格式或探索程式無意間改變正式業務規則。
 
 ## 3. 元件與程式位置
 
 | 元件 | 位置 | 輸入 | 輸出／副作用 |
 |---|---|---|---|
 | 原始資料剖析 | `src/profiling/` | Stata 原始檔 | 公開彙總與本機逐筆檢查結果 |
+| MOI 發布批次與來源轉接 | `src/ingestion/` | MOI 發布批次 ZIP | 發布紀錄檔、不可變 ZIP 與符合 24 欄原始欄位契約的資料批次 |
 | 行政區參照 | `src/reference/`、`data/reference/` | 來源對照資料 | 版本化行政區與別名 CSV |
-| 清理流程 | `src/cleaning/` | 原始檔、行政區參照 | 清理後／排除 Parquet、稽核 JSON |
+| 清理流程 | `src/cleaning/` | DTA 或 MOI 轉接器、行政區參照 | 清理後／排除 Parquet、稽核 JSON |
 | 暫存層載入 | `src/loading/`、`sql/staging/` | 清理後 Parquet | `staging` 資料與載入紀錄 |
 | 核心層同步 | `src/core/`、`sql/core/` | 成功的 staging 批次 | 維度、交易事實與同步紀錄 |
 | 分析層更新 | `src/analytics/`、`sql/analytics/` | `core` 與月份變更 | 三張 Tableau KPI 表與更新紀錄 |
@@ -60,11 +62,12 @@ PostgreSQL
 
 | 資料層 | 負責 | 不負責 |
 |---|---|---|
-| 原始資料 | 保存不可變來源 | 修正、覆寫、納入公開專案 |
+| 原始資料 | 保存不可變 DTA 與各 MOI 發布批次 ZIP | 修正、覆寫、納入公開專案 |
+| MOI 轉接 | 驗證 ZIP／欄名、選取買賣主檔、轉成共通原始欄位契約 | 決定正式納入、KPI 或跨批次刪除 |
 | 資料剖析 | 驗證來源結構、分布與清理假設 | 決定正式清理規則 |
 | 清理 | 納入／排除、欄位標準化、品質標記與稽核 | BI 聚合與視覺呈現 |
 | Parquet | 保存目前成功的清理後／排除檢查點 | 保存歷次完整資料快照 |
-| `staging` | 接收清理後資料、UPSERT、批次與月份變更追蹤 | 面向使用者的 KPI |
+| `staging` | 接收清理後資料、新增或更新、批次與月份變更追蹤 | 面向使用者的 KPI |
 | `core` | 一致化維度、鍵值與逐筆交易事實 | Tableau 呈現邏輯 |
 | `analytics` | 聚合、單位換算、移動窗口與年增率 | 解析原始欄位 |
 | Tableau | 圖表、控制項、互動與敘事 | 清理來源或重新定義 KPI |
@@ -73,14 +76,15 @@ PostgreSQL
 
 | 邊界 | 必須成立的條件 | 權威文件 |
 |---|---|---|
-| 原始資料 → 清理 | 必要欄位存在；每列只能進入清理後或排除資料其中之一 | [資料清理與欄位契約](data-contract.md) |
+| MOI ZIP → 轉接器 | 發布批次身分、檢查碼、主檔與必要欄名有效 | [資料來源與更新](data-sources.md) |
+| 原始資料／轉接器 → 清理 | 符合 24 欄原始欄位契約；每列只能進入清理後或排除資料其中之一 | [資料清理與欄位契約](data-contract.md) |
 | 清理 → Parquet | 欄位、型別、`NULL` 與品質標記符合契約；輸出可完整讀回 | [資料清理與欄位契約](data-contract.md) |
 | Parquet → `staging` | 單一清理執行、來源 ID 唯一、筆數與綱要通過載入前檢核 | [PostgreSQL 資料流程與操作](database-operations.md) |
 | `staging` → `core` | 只接受明確且成功的 `load_batch_id`；固定維度完整 | [PostgreSQL 資料流程與操作](database-operations.md) |
-| `core` → `analytics` | KPI 母體與影響月份可重算；三組驗證全部通過才發布 | [分析指標與 Tableau Dashboard](analytics-dashboard.md) |
-| `analytics` → Tableau | Tableau 使用既定聚合，不平均中位數、不混合土地與房屋 | [分析指標與 Tableau Dashboard](analytics-dashboard.md) |
+| `core` → `analytics` | KPI 母體與影響月份可重算；三組驗證全部通過才發布 | [分析指標與 Tableau 儀表板](analytics-dashboard.md) |
+| `analytics` → Tableau | Tableau 使用既定聚合，不平均中位數、不混合土地與房屋 | [分析指標與 Tableau 儀表板](analytics-dashboard.md) |
 
-`staging` 與 `core` 都採 UPSERT-only：新資料新增、既有內容改變時更新，本批沒有出現的既有 ID 不自動刪除。這項語意避免把不完整批次誤當成完整快照。
+`staging` 與 `core` 都只新增或更新：新資料新增、既有內容改變時更新，本批沒有出現的既有 ID 不自動刪除。這項語意避免把不完整批次誤當成完整快照。
 
 ## 6. PostgreSQL 邏輯模型
 
@@ -122,28 +126,33 @@ dim_location ─ fact_transactions ─ dim_building_type
 
 | 識別碼 | 範圍 | 用途 |
 |---|---|---|
+| `release_id`＋SHA-256 | MOI 官方來源 | 識別發布順序、修訂版與相同來源內容 |
 | `cleaning_run_id` | 清理輸出 | 串接清理後資料、排除資料與稽核 |
 | `load_batch_id` | `staging`、`core`、`analytics` | 串接同一批資料庫更新與增量影響 |
 | `analytics_run_id` | 分析層更新 | 記錄完整或增量更新的嘗試序列 |
 
 日常流程在同一把 PostgreSQL advisory lock 下依序發布各層。只有前一層成功且對帳一致，下一層才可更新；存在無法判斷順序的失敗批次時，新批次會被阻擋。
 
+MOI 發布紀錄檔串接來源檢查碼、`cleaning_run_id`、測試／正式 `load_batch_id` 與 `analytics_run_id`。每個發布批次先產生獨立 Parquet 與稽核結果，通過來源及清理門檻後，先在具備相同 DTA 底稿的測試資料庫檢查，再更新正式資料庫。SQL 流程在 `analytics` 成功後結束，Tableau 不屬於自動發布階段。
+
 ## 8. Tableau 交付模式
 
 | 模式／交付物 | 資料存取 | 使用情境 |
 |---|---|---|
 | 本機即時開發模式 | 以 `tableau_reader` 唯讀連線 PostgreSQL | 本機開發與更新後驗證；工作簿不公開 |
-| `housing_portfolio.twbx` | 啟用並內嵌 Hyper extract | 離線檢視、作品集分享 |
+| `housing_portfolio.twbx` | 啟用並內嵌 Hyper 擷取檔 | 離線檢視、作品集分享 |
 
 Hyper 只包含 `national_monthly_kpi`、`city_monthly_kpi`、`district_rolling_3m` 與 `dim_location`。它不包含 `staging`、逐筆 `fact_transactions`、原始資料或 Parquet。即時版與可攜版的畫面與計算邏輯相同；可攜版是特定發布快照，不會自動跟隨 PostgreSQL 更新。
 
 ## 9. 系統邊界
 
 - 原始 `.dta` 不可變、不覆寫，也不隨公開專案提供。
+- MOI 發布批次 ZIP 依 `release_id` 保存；同日檢查碼改變時建立修訂版，不覆蓋舊檔。
 - 標準資料保存新台幣元與平方公尺；萬元與萬元／坪在分析層衍生。
 - 土地交易不與房屋 KPI 混算。
-- 正值極端值不在清理層自動刪除；其限制由稽核與 Dashboard 揭露。
+- 正值極端值不在清理層自動刪除；其限制由稽核與儀表板揭露。
 - Tableau 不直接查詢原始檔、Parquet 或完整交易事實表。
+- 新竹市、嘉義市在 MOI v1 暫時全部映射東區；這是來源相容限制，不代表真實行政區。
 - 逐筆剖析結果、Parquet、稽核輸出、密碼與本機資料庫不隨公開專案提供。
 - 所得、人口、負擔能力、房價所得比與品質調整房價指數不屬於 Tableau v1。
 

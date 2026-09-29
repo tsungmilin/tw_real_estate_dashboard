@@ -195,6 +195,7 @@ def apply_staging_ddl(config: LoadConfig) -> None:
         config.sql_dir / "004_validate_load.sql",
         config.sql_dir / "005_create_load_month_changes.sql",
         config.sql_dir / "006_validate_upsert_load.sql",
+        config.sql_dir / "007_expand_transaction_year.sql",
     ]
     for sql_file in required:
         if not sql_file.is_file():
@@ -257,7 +258,7 @@ BEGIN
         count(source_transaction_id),
         count(*) FILTER (WHERE cleaning_run_id = {run_literal}),
         count(*) FILTER (
-            WHERE transaction_year BETWEEN 2012 AND 2024
+            WHERE transaction_year BETWEEN 2012 AND 9999
               AND transaction_month BETWEEN 1 AND 12
         )
     INTO

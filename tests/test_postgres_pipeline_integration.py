@@ -870,7 +870,8 @@ def test_disposable_postgres_national_monthly_analytics(
         _run_sql_file(database, sql_file)
 
     # 2012-08 至 2013-08 多數月份各 4 筆；2013-01 只有 2 筆，
-    # 仍應保留在完整骨架。尾端 2013-09 先只有 2 筆，低於 3 筆門檻。
+    # 仍應保留在完整骨架。2013-09 至 11 是尾端緩衝月份且低於門檻，
+    # 讓三個月尾端上限停在 2013-08。
     _query(
         database,
         """
@@ -895,13 +896,15 @@ WITH monthly_counts AS (
         CASE
             WHEN generated.month_start::DATE IN (
                 DATE '2013-01-01',
-                DATE '2013-09-01'
+                DATE '2013-09-01',
+                DATE '2013-10-01',
+                DATE '2013-11-01'
             ) THEN 2
             ELSE 4
         END AS transaction_count
     FROM GENERATE_SERIES(
         DATE '2012-08-01',
-        DATE '2013-09-01',
+        DATE '2013-11-01',
         INTERVAL '1 month'
     ) AS generated(month_start)
 )
@@ -987,6 +990,25 @@ SELECT
     9000000 + generated.sequence_number * 100000,
     120000.0 + generated.sequence_number * 1000
 FROM GENERATE_SERIES(1, 2) AS generated(sequence_number);
+
+INSERT INTO core.fact_transactions (
+    source_transaction_id,
+    transaction_month,
+    location_id,
+    building_type_id,
+    transaction_type,
+    total_price_ntd,
+    unit_price_ntd_m2
+)
+VALUES (
+    'TAIL-201312-1',
+    DATE '2013-12-01',
+    (SELECT location_id FROM core.dim_location LIMIT 1),
+    2,
+    '房地(土地+建物)',
+    9000000,
+    120000.0
+);
 """,
     )
     _record_successful_analytics_batch(
@@ -1162,7 +1184,7 @@ def test_disposable_postgres_city_monthly_analytics(
         _run_sql_file(database, sql_file)
 
     # 每個完整月份放 4 筆臺北市交易；2013-01 是中間低量月，2013-09
-    # 起初是未達門檻的尾端月份。其他 21 縣市刻意保持零交易。
+    # 至 11 是低量尾端緩衝月份。其他 21 縣市刻意保持零交易。
     _query(
         database,
         """
@@ -1172,13 +1194,15 @@ WITH monthly_counts AS (
         CASE
             WHEN generated.month_start::DATE IN (
                 DATE '2013-01-01',
-                DATE '2013-09-01'
+                DATE '2013-09-01',
+                DATE '2013-10-01',
+                DATE '2013-11-01'
             ) THEN 2
             ELSE 4
         END AS transaction_count
     FROM GENERATE_SERIES(
         DATE '2012-08-01',
-        DATE '2013-09-01',
+        DATE '2013-11-01',
         INTERVAL '1 month'
     ) AS generated(month_start)
 )
@@ -1343,6 +1367,31 @@ SELECT
     9000000 + generated.sequence_number * 100000,
     120000.0 + generated.sequence_number * 1000
 FROM GENERATE_SERIES(1, 2) AS generated(sequence_number);
+
+INSERT INTO core.fact_transactions (
+    source_transaction_id,
+    transaction_month,
+    location_id,
+    building_type_id,
+    transaction_type,
+    total_price_ntd,
+    unit_price_ntd_m2
+)
+VALUES (
+    'CITY-TAIL-201312-1',
+    DATE '2013-12-01',
+    (
+        SELECT location.location_id
+        FROM core.dim_location AS location
+        WHERE location.city = '臺北市'
+        ORDER BY location.location_id
+        LIMIT 1
+    ),
+    2,
+    '房地(土地+建物)',
+    9000000,
+    120000.0
+);
 """,
     )
     _record_successful_analytics_batch(
@@ -1518,9 +1567,9 @@ LIMIT 1;
 """,
     )
 
-    # 2012-08 至 2013-12 各 4 筆；2014-01 先只有 2 筆，因此 National
-    # 75% cutoff 停在 2013-12。所有交易集中在同一臺北行政區，其他
-    # 行政區用來驗證零交易骨架。
+    # 2012-08 至 2013-12 各 4 筆；2014-01 至 03 各 2 筆，讓三個月
+    # 尾端上限與 75% 滾動門檻都停在 2013-12。所有交易集中在同一
+    # 臺北行政區，其他行政區用來驗證零交易骨架。
     _query(
         database,
         f"""
@@ -1528,13 +1577,13 @@ WITH monthly_counts AS (
     SELECT
         generated.month_start::DATE AS month_start,
         CASE
-            WHEN generated.month_start::DATE = DATE '2014-01-01'
+            WHEN generated.month_start::DATE >= DATE '2014-01-01'
             THEN 2
             ELSE 4
         END AS transaction_count
     FROM GENERATE_SERIES(
         DATE '2012-08-01',
-        DATE '2014-01-01',
+        DATE '2014-03-01',
         INTERVAL '1 month'
     ) AS generated(month_start)
 )
@@ -1776,6 +1825,33 @@ SELECT
     9000000 + generated.sequence_number * 100000,
     120000.0 + generated.sequence_number * 1000
 FROM GENERATE_SERIES(1, 2) AS generated(sequence_number);
+
+INSERT INTO core.fact_transactions (
+    source_transaction_id,
+    transaction_month,
+    location_id,
+    building_type_id,
+    transaction_type,
+    total_price_ntd,
+    unit_price_ntd_m2
+)
+VALUES (
+    'DISTRICT-TAIL-201404-1',
+    DATE '2014-04-01',
+    (
+        SELECT location.location_id
+        FROM core.dim_location AS location
+        WHERE location.town_id = {sql_literal(taipei_town_id)}
+    ),
+    (
+        SELECT MIN(building_type.building_type_id)
+        FROM core.dim_building_type AS building_type
+        WHERE building_type.building_type_id <> 0
+    ),
+    '房地(土地+建物)',
+    9000000,
+    120000.0
+);
 """,
     )
     _record_successful_analytics_batch(

@@ -1,5 +1,7 @@
--- 以 core.fact_transactions 獨立重算的結果驗證 analytics.national_monthly_kpi；
--- 本檔不修改永久資料。
+-- 用途：以 core.fact_transactions 獨立重算全國月 KPI 並與目標表對帳。
+-- 寫入：不修改永久資料，只建立本次交易使用的暫存表。
+-- 前置條件：core.fact_transactions 與 analytics.national_monthly_kpi 已存在。
+-- 回傳：截止月份狀態、涵蓋範圍及 KPI 不一致筆數。
 
 BEGIN;
 
@@ -9,9 +11,11 @@ ON COMMIT DROP
 AS
 SELECT
     DATE '2012-08-01' AS analysis_start_month,
-    0.75::NUMERIC(5,4) AS tail_volume_threshold;
+    12::INTEGER AS rolling_window_months,
+    0.75::NUMERIC(5,4) AS tail_volume_threshold,
+    3::INTEGER AS tail_lag_months;
 
--- 從 core 重算候選截止月份，並讀取 Analytics 目前的截止月份。
+-- 從 `core` 重算候選截止月份，並讀取 `analytics` 目前的截止月份。
 CREATE TEMP TABLE national_monthly_validation_cutoff
 ON COMMIT DROP
 AS
@@ -31,21 +35,53 @@ WITH monthly_transaction_counts AS (
       AND fact.unit_price_ntd_m2 IS NOT NULL
     GROUP BY fact.transaction_month
 ),
-baseline AS (
+source_coverage AS (
     SELECT
-        PERCENTILE_CONT(0.5) WITHIN GROUP (
-            ORDER BY monthly.price_complete_transaction_count
-        )::NUMERIC AS baseline_transaction_count
+        MAX(fact.transaction_month)::DATE AS source_max_month,
+        (
+            MAX(fact.transaction_month)
+            - MAKE_INTERVAL(months => parameter.tail_lag_months)
+        )::DATE AS source_ceiling_month
+    FROM core.fact_transactions AS fact
+    CROSS JOIN national_monthly_validation_parameter AS parameter
+    GROUP BY parameter.tail_lag_months
+),
+scored_months AS (
+    SELECT
+        monthly.month_start,
+        monthly.price_complete_transaction_count,
+        rolling.baseline_transaction_count,
+        rolling.baseline_month_count
     FROM monthly_transaction_counts AS monthly
+    CROSS JOIN national_monthly_validation_parameter AS parameter
+    CROSS JOIN LATERAL (
+        SELECT
+            PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY history.price_complete_transaction_count
+            )::NUMERIC AS baseline_transaction_count,
+            COUNT(*)::INTEGER AS baseline_month_count
+        FROM monthly_transaction_counts AS history
+        WHERE history.month_start >= (
+                  monthly.month_start
+                  - MAKE_INTERVAL(months => parameter.rolling_window_months)
+              )::DATE
+          AND history.month_start < monthly.month_start
+    ) AS rolling
 ),
 candidate_cutoff AS (
-    SELECT MAX(monthly.month_start)::DATE AS candidate_end_month
-    FROM monthly_transaction_counts AS monthly
-    CROSS JOIN baseline
+    SELECT
+        scored.month_start::DATE AS candidate_end_month,
+        scored.baseline_transaction_count
+    FROM scored_months AS scored
+    CROSS JOIN source_coverage AS coverage
     CROSS JOIN national_monthly_validation_parameter AS parameter
-    WHERE monthly.price_complete_transaction_count
-          >= baseline.baseline_transaction_count
+    WHERE scored.baseline_month_count BETWEEN 1 AND parameter.rolling_window_months
+      AND scored.month_start <= coverage.source_ceiling_month
+      AND scored.price_complete_transaction_count
+          >= scored.baseline_transaction_count
              * parameter.tail_volume_threshold
+    ORDER BY scored.month_start DESC
+    LIMIT 1
 ),
 current_cutoff AS (
     SELECT MAX(target.month_start)::DATE AS current_end_month
@@ -53,29 +89,33 @@ current_cutoff AS (
 )
 SELECT
     parameter.analysis_start_month,
-    baseline.baseline_transaction_count,
+    parameter.rolling_window_months,
     parameter.tail_volume_threshold,
-    baseline.baseline_transaction_count
+    parameter.tail_lag_months,
+    coverage.source_max_month,
+    coverage.source_ceiling_month,
+    candidate.baseline_transaction_count,
+    candidate.baseline_transaction_count
         * parameter.tail_volume_threshold
         AS threshold_transaction_count,
-    candidate_cutoff.candidate_end_month,
+    candidate.candidate_end_month,
     current_cutoff.current_end_month,
     CASE
         WHEN current_cutoff.current_end_month IS NULL
-        THEN candidate_cutoff.candidate_end_month
-        WHEN candidate_cutoff.candidate_end_month IS NULL
+        THEN candidate.candidate_end_month
+        WHEN candidate.candidate_end_month IS NULL
         THEN current_cutoff.current_end_month
         ELSE GREATEST(
             current_cutoff.current_end_month,
-            candidate_cutoff.candidate_end_month
+            candidate.candidate_end_month
         )
     END AS validation_end_month
 FROM national_monthly_validation_parameter AS parameter
-CROSS JOIN baseline
-CROSS JOIN candidate_cutoff
+CROSS JOIN source_coverage AS coverage
+CROSS JOIN candidate_cutoff AS candidate
 CROSS JOIN current_cutoff;
 
--- 從 core 獨立重算 validation_end_month 以前的月份骨架、月 KPI 與 YoY。
+-- 從 `core` 獨立重算 validation_end_month 以前的月份骨架、月 KPI 與 YoY。
 -- 若目前截止月份落後候選值，也建立尚缺月份，供後續涵蓋範圍驗證辨識。
 CREATE TEMP TABLE national_monthly_expected_kpi
 ON COMMIT DROP
@@ -234,8 +274,12 @@ FROM year_pairs;
 -- 若要縮短，必須人工檢查後執行完整更新。
 SELECT
     cutoff.analysis_start_month,
-    cutoff.baseline_transaction_count,
+    cutoff.rolling_window_months,
     cutoff.tail_volume_threshold,
+    cutoff.tail_lag_months,
+    cutoff.source_max_month,
+    cutoff.source_ceiling_month,
+    cutoff.baseline_transaction_count,
     cutoff.threshold_transaction_count,
     cutoff.candidate_end_month,
     cutoff.current_end_month,

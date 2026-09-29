@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS staging.stg_transactions (
     load_batch_id TEXT NOT NULL,
     loaded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT stg_transactions_year_check
-        CHECK (transaction_year BETWEEN 2012 AND 2024),
+        CHECK (transaction_year BETWEEN 2012 AND 9999),
     CONSTRAINT stg_transactions_month_check
         CHECK (transaction_month BETWEEN 1 AND 12),
     CONSTRAINT stg_transactions_completion_status_check

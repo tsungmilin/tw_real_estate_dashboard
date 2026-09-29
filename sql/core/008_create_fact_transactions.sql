@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS core.fact_transactions (
         CHECK (
             EXTRACT(DAY FROM transaction_month) = 1
             AND transaction_month BETWEEN
-                DATE '2012-08-01' AND DATE '2024-12-01'
+                DATE '2012-08-01' AND DATE '9999-12-01'
         ),
 
     CONSTRAINT fact_transactions_type_check

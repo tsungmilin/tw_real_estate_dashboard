@@ -1,5 +1,7 @@
--- 依一個成功的 core 批次增量更新全國月 KPI。
--- 必須透過 psql 傳入 --set=load_batch_id=<明確的批次 ID>。
+-- 用途：依一個成功的 `core` 批次增量更新全國月 KPI。
+-- 寫入：只重算受影響的基礎月份與年增率月份；失敗時整筆交易復原。
+-- 前置條件：透過 psql 傳入 --set=load_batch_id=<明確的批次 ID>。
+-- 回傳：截止月份判斷、受影響月份與更新範圍。
 
 \if :{?load_batch_id}
 \else
@@ -24,30 +26,42 @@ $national_monthly_refresh_lock$;
 CREATE TEMP TABLE national_monthly_refresh_parameter (
     load_batch_id TEXT PRIMARY KEY,
     analysis_start_month DATE NOT NULL,
+    rolling_window_months INTEGER NOT NULL,
     tail_volume_threshold NUMERIC(5,4) NOT NULL,
+    tail_lag_months INTEGER NOT NULL,
 
     CONSTRAINT national_monthly_refresh_parameter_month_check
         CHECK (EXTRACT(DAY FROM analysis_start_month) = 1),
+
+    CONSTRAINT national_monthly_refresh_parameter_window_check
+        CHECK (rolling_window_months >= 1),
 
     CONSTRAINT national_monthly_refresh_parameter_threshold_check
         CHECK (
             tail_volume_threshold > 0
             AND tail_volume_threshold <= 1
-        )
+        ),
+
+    CONSTRAINT national_monthly_refresh_parameter_lag_check
+        CHECK (tail_lag_months >= 0)
 ) ON COMMIT DROP;
 
 INSERT INTO national_monthly_refresh_parameter (
     load_batch_id,
     analysis_start_month,
-    tail_volume_threshold
+    rolling_window_months,
+    tail_volume_threshold,
+    tail_lag_months
 )
 VALUES (
     :'load_batch_id',
     DATE '2012-08-01',
-    0.75
+    12,
+    0.75,
+    3
 );
 
--- 先驗證指定的 core batch，避免無效輸入仍掃描整張 core fact。
+-- 先驗證指定的 `core` 批次，避免無效輸入仍掃描整張核心事實表。
 DO $national_monthly_refresh_core_batch_gate$
 DECLARE
     v_load_batch_id TEXT;
@@ -77,14 +91,18 @@ BEGIN
 END
 $national_monthly_refresh_core_batch_gate$;
 
--- 直接從 core 計算尾端完整性判斷：
+-- 直接從 `core` 計算尾端完整性判斷：
 -- 1. 先算每月價格完整房屋交易案件數。
--- 2. 以所有月份案件數的中位數作為基準。
--- 3. 取案件數 >= 基準 75% 的最晚月份為候選截止。
+-- 2. 每個月份只用最多前 12 個月份的中位數作為滾動基準；歷史不足
+--    一年時使用當下已有月份。
+-- 3. 候選月份必須達滾動基準 75%，且不超過來源最大月份往前 3 個月。
 -- 4. 增量更新只允許延伸，不自動縮短既有分析範圍。
 CREATE TEMP TABLE national_monthly_refresh_cutoff (
     baseline_transaction_count NUMERIC,
     tail_volume_threshold NUMERIC(5,4) NOT NULL,
+    threshold_transaction_count NUMERIC,
+    source_max_month DATE NOT NULL,
+    source_ceiling_month DATE NOT NULL,
     candidate_end_month DATE,
     current_end_month DATE,
     effective_end_month DATE
@@ -106,22 +124,53 @@ WITH monthly_transaction_counts AS (
       AND fact.unit_price_ntd_m2 IS NOT NULL
     GROUP BY fact.transaction_month
 ),
-baseline AS (
+source_coverage AS (
     SELECT
-        PERCENTILE_CONT(0.5) WITHIN GROUP (
-            ORDER BY monthly.price_complete_transaction_count
-        )::NUMERIC AS baseline_transaction_count
+        MAX(fact.transaction_month)::DATE AS source_max_month,
+        (
+            MAX(fact.transaction_month)
+            - MAKE_INTERVAL(months => parameter.tail_lag_months)
+        )::DATE AS source_ceiling_month
+    FROM core.fact_transactions AS fact
+    CROSS JOIN national_monthly_refresh_parameter AS parameter
+    GROUP BY parameter.tail_lag_months
+),
+scored_months AS (
+    SELECT
+        monthly.month_start,
+        monthly.price_complete_transaction_count,
+        rolling.baseline_transaction_count,
+        rolling.baseline_month_count
     FROM monthly_transaction_counts AS monthly
+    CROSS JOIN national_monthly_refresh_parameter AS parameter
+    CROSS JOIN LATERAL (
+        SELECT
+            PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY history.price_complete_transaction_count
+            )::NUMERIC AS baseline_transaction_count,
+            COUNT(*)::INTEGER AS baseline_month_count
+        FROM monthly_transaction_counts AS history
+        WHERE history.month_start >= (
+                  monthly.month_start
+                  - MAKE_INTERVAL(months => parameter.rolling_window_months)
+              )::DATE
+          AND history.month_start < monthly.month_start
+    ) AS rolling
 ),
 candidate_cutoff AS (
     SELECT
-        MAX(monthly.month_start)::DATE AS candidate_end_month
-    FROM monthly_transaction_counts AS monthly
-    CROSS JOIN baseline
+        scored.month_start::DATE AS candidate_end_month,
+        scored.baseline_transaction_count
+    FROM scored_months AS scored
+    CROSS JOIN source_coverage AS coverage
     CROSS JOIN national_monthly_refresh_parameter AS parameter
-    WHERE monthly.price_complete_transaction_count
-          >= baseline.baseline_transaction_count
+    WHERE scored.baseline_month_count BETWEEN 1 AND parameter.rolling_window_months
+      AND scored.month_start <= coverage.source_ceiling_month
+      AND scored.price_complete_transaction_count
+          >= scored.baseline_transaction_count
              * parameter.tail_volume_threshold
+    ORDER BY scored.month_start DESC
+    LIMIT 1
 ),
 current_cutoff AS (
     SELECT MAX(target.month_start)::DATE AS current_end_month
@@ -130,25 +179,32 @@ current_cutoff AS (
 INSERT INTO national_monthly_refresh_cutoff (
     baseline_transaction_count,
     tail_volume_threshold,
+    threshold_transaction_count,
+    source_max_month,
+    source_ceiling_month,
     candidate_end_month,
     current_end_month,
     effective_end_month
 )
 SELECT
-    baseline.baseline_transaction_count,
+    candidate.baseline_transaction_count,
     parameter.tail_volume_threshold,
-    candidate_cutoff.candidate_end_month,
+    candidate.baseline_transaction_count
+        * parameter.tail_volume_threshold,
+    coverage.source_max_month,
+    coverage.source_ceiling_month,
+    candidate.candidate_end_month,
     current_cutoff.current_end_month,
     GREATEST(
         current_cutoff.current_end_month,
-        candidate_cutoff.candidate_end_month
+        candidate.candidate_end_month
     ) AS effective_end_month
-FROM baseline
-CROSS JOIN candidate_cutoff
+FROM candidate_cutoff AS candidate
+CROSS JOIN source_coverage AS coverage
 CROSS JOIN current_cutoff
 CROSS JOIN national_monthly_refresh_parameter AS parameter;
 
--- 增量更新只接受已完成的 core 批次，而且要求完整更新
+-- 增量更新只接受已完成的 `core` 批次，而且要求完整更新
 -- 已先建立從固定起點到目前截止月份的完整月份骨架。
 DO $national_monthly_refresh_input_gate$
 DECLARE
@@ -220,7 +276,7 @@ END
 $national_monthly_refresh_input_gate$;
 
 -- M 包含兩類月份：
--- 1. 這個 core batch 實際影響、且已位於有效分析範圍內的月份。
+-- 1. 這個 `core` 批次實際影響、且已位於有效分析範圍內的月份。
 -- 2. 候選截止向後延伸時，從原截止下一月至新截止的所有月份。
 -- 第二類使用完整月序列，因此不會因中間月份未達 75% 而產生缺口。
 CREATE TEMP TABLE national_monthly_affected_base_months (
@@ -265,7 +321,7 @@ CROSS JOIN national_monthly_refresh_cutoff AS cutoff
 WHERE (affected.month_start + INTERVAL '1 year')::DATE
           <= cutoff.effective_end_month;
 
--- 只從 core 重算受影響月份 M 的價格與交易量。LEFT JOIN 保留
+-- 只從 `core` 重算受影響月份 M 的價格與交易量。LEFT JOIN 保留
 -- 已無符合 KPI 交易的月份，使該月 count = 0、價格 = NULL。
 WITH refreshed_base_values AS (
     SELECT
@@ -433,8 +489,13 @@ WHERE target.month_start = recalculated.month_start;
 -- effective_end_month 仍保留目前截止，交由人工檢查。
 SELECT
     parameter.load_batch_id,
-    cutoff.baseline_transaction_count,
+    parameter.rolling_window_months,
     cutoff.tail_volume_threshold,
+    parameter.tail_lag_months,
+    cutoff.source_max_month,
+    cutoff.source_ceiling_month,
+    cutoff.baseline_transaction_count,
+    cutoff.threshold_transaction_count,
     cutoff.candidate_end_month,
     cutoff.current_end_month,
     cutoff.effective_end_month,

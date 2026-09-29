@@ -169,6 +169,7 @@ def test_apply_staging_ddl_uses_upsert_migrations(
         "004_validate_load.sql",
         "005_create_load_month_changes.sql",
         "006_validate_upsert_load.sql",
+        "007_expand_transaction_year.sql",
     ]
     for name in expected_names:
         (tmp_path / name).touch()

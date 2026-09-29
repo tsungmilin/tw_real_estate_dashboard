@@ -187,13 +187,18 @@ def _date_array(value: str) -> list[str]:
 
 def _parse_refresh_summary(mode: str, grain: str, output: str) -> dict[str, object]:
     if mode == "full" and grain == "national":
-        fields = _row(output, 5, "national full refresh")
+        fields = _row(output, 10, "national full refresh")
         return {
             "analysis_start_month": fields[0],
-            "baseline_transaction_count": fields[1],
+            "rolling_window_months": _integer(fields[1], "rolling_window_months"),
             "tail_volume_threshold": fields[2],
-            "analysis_end_month": fields[3],
-            "refreshed_month_count": _integer(fields[4], "refreshed_month_count"),
+            "tail_lag_months": _integer(fields[3], "tail_lag_months"),
+            "source_max_month": fields[4],
+            "source_ceiling_month": fields[5],
+            "baseline_transaction_count": fields[6],
+            "threshold_transaction_count": fields[7],
+            "analysis_end_month": fields[8],
+            "refreshed_month_count": _integer(fields[9], "refreshed_month_count"),
         }
     if mode == "full" and grain == "city":
         fields = _row(output, 5, "city full refresh")
@@ -217,21 +222,26 @@ def _parse_refresh_summary(mode: str, grain: str, output: str) -> dict[str, obje
     if grain == "national":
         fields = _row(
             output,
-            10,
+            15,
             "national incremental refresh",
             nullable_trailing_columns=2,
         )
         return {
             "load_batch_id": fields[0],
-            "baseline_transaction_count": fields[1],
+            "rolling_window_months": _integer(fields[1], "rolling_window_months"),
             "tail_volume_threshold": fields[2],
-            "candidate_end_month": fields[3] or None,
-            "current_end_month": fields[4] or None,
-            "effective_end_month": fields[5] or None,
-            "affected_base_month_count": _integer(fields[6], "affected_base_month_count"),
-            "affected_yoy_month_count": _integer(fields[7], "affected_yoy_month_count"),
-            "affected_base_months": _date_array(fields[8]),
-            "affected_yoy_months": _date_array(fields[9]),
+            "tail_lag_months": _integer(fields[3], "tail_lag_months"),
+            "source_max_month": fields[4],
+            "source_ceiling_month": fields[5],
+            "baseline_transaction_count": fields[6],
+            "threshold_transaction_count": fields[7],
+            "candidate_end_month": fields[8] or None,
+            "current_end_month": fields[9] or None,
+            "effective_end_month": fields[10] or None,
+            "affected_base_month_count": _integer(fields[11], "affected_base_month_count"),
+            "affected_yoy_month_count": _integer(fields[12], "affected_yoy_month_count"),
+            "affected_base_months": _date_array(fields[13]),
+            "affected_yoy_months": _date_array(fields[14]),
         }
     if grain == "city":
         fields = _row(
@@ -285,22 +295,29 @@ def _parse_national_validation(output: str, *, mode: str) -> dict[str, object]:
     coverage = lines[1].split("\t")
     base = lines[2].split("\t")
     yoy = lines[3].split("\t")
-    if len(cutoff) != 8 or len(coverage) != 4 or len(base) != 6 or len(yoy) != 5:
+    if len(cutoff) != 12 or len(coverage) != 4 or len(base) != 6 or len(yoy) != 5:
         raise AnalyticsRefreshError("unexpected national validation output shape")
     allowed = {"PASS_ALIGNED"}
     if mode == "incremental":
         allowed.add("REVIEW_CURRENT_AHEAD_OF_CANDIDATE")
-    if cutoff[7] not in allowed:
-        raise AnalyticsRefreshError(f"national cutoff validation failed: {cutoff[7]}")
+    if cutoff[11] not in allowed:
+        raise AnalyticsRefreshError(f"national cutoff validation failed: {cutoff[11]}")
     if coverage[0] != coverage[1]:
         raise AnalyticsRefreshError(f"national coverage count mismatch: {coverage}")
     _zero_fields(coverage[2:], "national coverage")
     _zero_fields(base, "national base KPI validation")
     _zero_fields(yoy, "national YoY validation")
     return {
-        "cutoff_status": cutoff[7],
-        "candidate_end_month": cutoff[4] or None,
-        "current_end_month": cutoff[5] or None,
+        "cutoff_status": cutoff[11],
+        "rolling_window_months": _integer(cutoff[1], "rolling_window_months"),
+        "tail_volume_threshold": cutoff[2],
+        "tail_lag_months": _integer(cutoff[3], "tail_lag_months"),
+        "source_max_month": cutoff[4] or None,
+        "source_ceiling_month": cutoff[5] or None,
+        "baseline_transaction_count": cutoff[6],
+        "threshold_transaction_count": cutoff[7],
+        "candidate_end_month": cutoff[8] or None,
+        "current_end_month": cutoff[9] or None,
         "expected_month_count": _integer(coverage[0], "expected_month_count"),
         "mismatch_count": 0,
     }

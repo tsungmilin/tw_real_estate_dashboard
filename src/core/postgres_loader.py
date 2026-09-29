@@ -23,6 +23,7 @@ CORE_DDL_FILES = (
     "005_create_dim_building_type.sql",
     "008_create_fact_transactions.sql",
     "011_create_sync_runs.sql",
+    "013_expand_transaction_month.sql",
 )
 
 # 初始化／完整修復是明確的人工操作，不會由日常 batch 自動觸發。

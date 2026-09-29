@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from argparse import Namespace
 from pathlib import Path
 from typing import Iterator
 
 import pytest
 
 import src.orchestration.pipeline as pipeline
+import src.orchestration.run_pipeline as pipeline_cli
 from src.analytics.postgres_loader import AnalyticsRefreshResult
 from src.core.postgres_loader import CoreSyncResult
 from src.loading.postgres_loader import LoadResult
@@ -15,6 +17,77 @@ from src.orchestration.pipeline import (
     PipelineConfig,
     run_pipeline,
 )
+
+
+def _cli_args(tmp_path: Path) -> Namespace:
+    clean_path = tmp_path / "transactions_clean.parquet"
+    clean_path.touch()
+    return Namespace(
+        parquet=clean_path,
+        database="real_estate_dashboard_moi_test",
+        psql="psql",
+        skip_ddl=False,
+        release_id="2026-09-21",
+        publication_target="test",
+        release_root=tmp_path / "releases",
+    )
+
+
+def test_registered_release_requires_matching_clean_parquet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _cli_args(tmp_path)
+    monkeypatch.setattr(
+        pipeline_cli,
+        "read_release",
+        lambda root, release_id: {
+            "cleaning": {
+                "status": "success",
+                "clean_path": str(tmp_path / "other.parquet"),
+            },
+            "publications": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        pipeline_cli._registered_release(args)
+
+
+def test_successful_registered_publication_is_a_noop_before_sql(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = _cli_args(tmp_path)
+    monkeypatch.setattr(pipeline_cli, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        pipeline_cli,
+        "read_release",
+        lambda root, release_id: {
+            "cleaning": {
+                "status": "success",
+                "clean_path": str(args.parquet),
+            },
+            "publications": {
+                "test": {
+                    "status": "success",
+                    "load_batch_id": "pgload_existing",
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        pipeline_cli,
+        "run_pipeline",
+        lambda config: pytest.fail("SQL pipeline must not run"),
+    )
+
+    pipeline_cli.main()
+
+    output = capsys.readouterr().out
+    assert "publication=noop_already_successful" in output
+    assert "load_batch_id=pgload_existing" in output
 
 
 def _staging_result(batch_id: str = "pgload_test") -> LoadResult:

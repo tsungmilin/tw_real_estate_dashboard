@@ -181,6 +181,8 @@ def process_chunk(
     duplicate_kinds: dict[str, str],
     exact_seen: set[str],
     audit: AuditAccumulator,
+    period_start: int = CANONICAL_PERIOD_START,
+    period_end: int = CANONICAL_PERIOD_END,
 ) -> ChunkResult:
     """處理一批資料，回傳可直接寫入清理後／排除 Parquet 的兩個資料框。"""
 
@@ -202,7 +204,7 @@ def process_chunk(
     valid_period = (
         roc_year.notna()
         & month.between(1, 12)
-        & period.between(CANONICAL_PERIOD_START, CANONICAL_PERIOD_END)
+        & period.between(period_start, period_end)
     )
 
     # 步驟 2：別名只修正已確認的舊名，再以縣市代碼與鄉鎮市區對應標準地點。

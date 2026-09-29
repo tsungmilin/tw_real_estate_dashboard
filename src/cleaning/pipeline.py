@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +23,8 @@ import pyarrow.parquet as pq
 from .audit import AuditAccumulator
 from .contract import (
     CLEAN_SCHEMA,
+    CANONICAL_PERIOD_END,
+    CANONICAL_PERIOD_START,
     CURRENT_SOURCE_BASELINE,
     CURRENT_SOURCE_SHA256,
     DEFAULT_CHUNK_SIZE,
@@ -35,6 +38,11 @@ from .contract import (
     SPEC_VERSION,
 )
 from .transforms import normalize_text, process_chunk
+from src.ingestion.moi_transactions import (
+    MoiZipInspection,
+    inspect_moi_zip,
+    iter_moi_transaction_chunks,
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,9 @@ class CleaningConfig:
     output_dir: Path
     audit_dir: Path
     chunk_size: int = DEFAULT_CHUNK_SIZE
+    period_start: int = CANONICAL_PERIOD_START
+    period_end: int | None = None
+    source_release_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,8 +91,15 @@ def _new_run_id() -> str:
     return f"{timestamp}-{uuid4().hex[:8]}"
 
 
+def _is_moi_zip(path: Path) -> bool:
+    return path.suffix.lower() == ".zip"
+
+
 def _raw_columns(path: Path) -> list[str]:
-    # 只讀 Stata metadata，正式 rows 由後面的 chunk reader 處理。
+    if _is_moi_zip(path):
+        return list(inspect_moi_zip(path).normalized_columns)
+
+    # DTA 底稿只讀 Stata 中繼資料；正式資料列由後續分批讀取器處理。
     reader = pd.io.stata.StataReader(
         path,
         convert_categoricals=False,
@@ -92,8 +110,38 @@ def _raw_columns(path: Path) -> list[str]:
     return list(reader.variable_labels())
 
 
+def _iter_raw_chunks(
+    path: Path,
+    columns: list[str],
+    chunk_size: int,
+) -> Iterator[pd.DataFrame]:
+    """依來源格式逐批回傳相同的原始欄位契約。"""
+
+    if _is_moi_zip(path):
+        for chunk in iter_moi_transaction_chunks(path, chunk_size=chunk_size):
+            yield chunk.loc[:, columns]
+        return
+
+    with pd.read_stata(
+        path,
+        columns=columns,
+        chunksize=chunk_size,
+        convert_categoricals=False,
+        convert_dates=False,
+        convert_missing=False,
+        preserve_dtypes=True,
+    ) as reader:
+        yield from reader
+
+
+def _validate_period_bound(value: int, label: str) -> None:
+    year, month = divmod(value, 100)
+    if year < 1 or not 1 <= month <= 12:
+        raise ValueError(f"{label} must be a valid ROC YYYYMM value")
+
+
 def _validate_raw_schema(path: Path) -> list[str]:
-    # 缺少必要欄位屬於結構問題，必須在寫出任何資料前 hard fail。
+    # 缺少必要欄位屬於結構問題，必須在寫出任何資料前立即停止。
     if not path.is_file():
         raise FileNotFoundError(f"raw source not found: {path}")
     columns = _raw_columns(path)
@@ -194,7 +242,7 @@ def _load_location_references(
 
 
 def _open_duplicate_database(path: Path) -> sqlite3.Connection:
-    # 438 萬個 ID 使用 disk-backed SQLite，避免全部塞進 Python set。
+    # 約 438 萬個 ID 使用磁碟型 SQLite，避免全部放入 Python 集合。
     # 資料庫位於本次執行的臨時目錄，完成或失敗後都會刪除。
     connection = sqlite3.connect(path)
     connection.execute("PRAGMA journal_mode=OFF")
@@ -217,38 +265,30 @@ def _scan_source_ids(
     chunk_size: int,
     connection: sqlite3.Connection,
 ) -> tuple[int, int, dict[str, int]]:
-    # 第一個 pass 只讀 no，精確找出跨 chunk duplicates 與 missing IDs。
+    # 第一輪只讀 `no`，找出跨批次的重複值與缺少 ID。
     total_rows = 0
     missing_rows = 0
-    with pd.read_stata(
-        raw_path,
-        columns=["no"],
-        chunksize=chunk_size,
-        convert_categoricals=False,
-        convert_dates=False,
-        convert_missing=False,
-        preserve_dtypes=True,
-    ) as reader:
-        for chunk_number, chunk in enumerate(reader, start=1):
-            total_rows += len(chunk)
-            source_ids = normalize_text(chunk["no"])
-            missing_rows += int(source_ids.isna().sum())
-            valid_ids = source_ids.dropna().astype(str)
-            connection.executemany(
-                """
-                INSERT INTO id_counts (source_id, occurrences)
-                VALUES (?, 1)
-                ON CONFLICT(source_id)
-                DO UPDATE SET occurrences = occurrences + 1
-                """,
-                ((source_id,) for source_id in valid_ids),
-            )
-            connection.commit()
-            print(
-                f"id_scan chunk={chunk_number} rows={total_rows} "
-                f"missing_ids={missing_rows}",
-                flush=True,
-            )
+    reader = _iter_raw_chunks(raw_path, ["no"], chunk_size)
+    for chunk_number, chunk in enumerate(reader, start=1):
+        total_rows += len(chunk)
+        source_ids = normalize_text(chunk["no"])
+        missing_rows += int(source_ids.isna().sum())
+        valid_ids = source_ids.dropna().astype(str)
+        connection.executemany(
+            """
+            INSERT INTO id_counts (source_id, occurrences)
+            VALUES (?, 1)
+            ON CONFLICT(source_id)
+            DO UPDATE SET occurrences = occurrences + 1
+            """,
+            ((source_id,) for source_id in valid_ids),
+        )
+        connection.commit()
+        print(
+            f"id_scan chunk={chunk_number} rows={total_rows} "
+            f"missing_ids={missing_rows}",
+            flush=True,
+        )
 
     duplicate_counts = {
         str(source_id): int(occurrences)
@@ -260,7 +300,7 @@ def _scan_source_ids(
 
 
 def _canonical_cell(value: Any) -> tuple[str, Any]:
-    # 將 NA 與浮點值轉成可穩定比較的形式，用來判斷 duplicate 是否衝突。
+    # 將缺失值與浮點值轉成可穩定比較的形式，用來判斷重複資料是否衝突。
     if value is None or pd.isna(value):
         return ("null", None)
     if isinstance(value, np.generic):
@@ -276,8 +316,8 @@ def _classify_duplicate_ids(
     chunk_size: int,
     duplicate_counts: dict[str, int],
 ) -> dict[str, str]:
-    # 常見路徑沒有 duplicates，因此不需要再掃 63 欄。
-    # 只有真的重複時才比較同 ID 的其餘 raw 欄位，分成 exact 或 conflict。
+    # 一般情況沒有重複 ID，因此不需要再次掃描 63 欄。
+    # 只有出現重複時才比較同 ID 的其餘原始欄位，區分完全相同或內容衝突。
     if not duplicate_counts:
         return {}
 
@@ -287,37 +327,33 @@ def _classify_duplicate_ids(
     observed = {source_id: 0 for source_id in duplicate_ids}
     conflicts: set[str] = set()
 
-    with pd.read_stata(
+    reader = _iter_raw_chunks(
         raw_path,
-        columns=["no", *comparison_columns],
-        chunksize=chunk_size,
-        convert_categoricals=False,
-        convert_dates=False,
-        convert_missing=False,
-        preserve_dtypes=True,
-    ) as reader:
-        for chunk_number, chunk in enumerate(reader, start=1):
-            source_ids = normalize_text(chunk["no"])
-            duplicate_mask = source_ids.isin(duplicate_ids)
-            if not bool(duplicate_mask.any()):
-                continue
-            selected = chunk.loc[duplicate_mask, comparison_columns]
-            selected_ids = source_ids.loc[duplicate_mask]
-            for source_id, values in zip(
-                selected_ids.astype(str),
-                selected.itertuples(index=False, name=None),
-                strict=True,
-            ):
-                observed[source_id] += 1
-                canonical = tuple(_canonical_cell(value) for value in values)
-                first = first_rows.setdefault(source_id, canonical)
-                if canonical != first:
-                    conflicts.add(source_id)
-            print(
-                f"duplicate_classification chunk={chunk_number} "
-                f"observed_rows={sum(observed.values())}",
-                flush=True,
-            )
+        ["no", *comparison_columns],
+        chunk_size,
+    )
+    for chunk_number, chunk in enumerate(reader, start=1):
+        source_ids = normalize_text(chunk["no"])
+        duplicate_mask = source_ids.isin(duplicate_ids)
+        if not bool(duplicate_mask.any()):
+            continue
+        selected = chunk.loc[duplicate_mask, comparison_columns]
+        selected_ids = source_ids.loc[duplicate_mask]
+        for source_id, values in zip(
+            selected_ids.astype(str),
+            selected.itertuples(index=False, name=None),
+            strict=True,
+        ):
+            observed[source_id] += 1
+            canonical = tuple(_canonical_cell(value) for value in values)
+            first = first_rows.setdefault(source_id, canonical)
+            if canonical != first:
+                conflicts.add(source_id)
+        print(
+            f"duplicate_classification chunk={chunk_number} "
+            f"observed_rows={sum(observed.values())}",
+            flush=True,
+        )
 
     if observed != duplicate_counts:
         raise ValueError(
@@ -354,7 +390,7 @@ class _ParquetWriters:
 
     @staticmethod
     def _table(frame: pd.DataFrame, schema: pa.Schema) -> pa.Table:
-        # 由 Arrow schema 統一型別，並再次阻止 required output 欄位出現 NULL。
+        # 由 Arrow 欄位結構統一型別，並再次阻止必要輸出欄位出現 `NULL`。
         table = pa.Table.from_pandas(
             frame,
             schema=schema,
@@ -393,7 +429,7 @@ def _validate_parquet(
     expected_schema: pa.Schema,
     expected_rows: int,
 ) -> dict[str, Any]:
-    # 以 batches 完整讀回，驗證 schema、row count 與 non-null contract。
+    # 分批完整讀回，驗證欄位結構、資料列數與不可為 `NULL` 的契約。
     parquet = pq.ParquetFile(path)
     actual_schema = parquet.schema_arrow
     if not actual_schema.equals(expected_schema, check_metadata=False):
@@ -434,7 +470,7 @@ def _validate_current_baseline(
     source_sha256: str,
     audit: AuditAccumulator,
 ) -> dict[str, Any]:
-    # 新來源仍需通過通用 gates；只有已知 checksum 才要求精確重現歷史 counts。
+    # 新來源仍需通過共通發布檢核；只有已知檢查碼才要求精確重現歷史筆數。
     actual = {
         "input_rows": audit.input_rows,
         **{
@@ -462,7 +498,7 @@ def _validate_current_baseline(
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    # 先寫同目錄 temporary file，再 replace，避免留下半份 JSON。
+    # 先寫入同目錄暫存檔再取代正式檔，避免留下不完整 JSON。
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -473,7 +509,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _publish_files(pairs: list[tuple[Path, Path]], backup_dir: Path) -> None:
-    # 發布前暫時保留上一版；若任一 replace 失敗就完整 rollback。
+    # 發布前暫時保留上一版；若任一檔案取代失敗就完整復原。
     backups: list[tuple[Path, Path]] = []
     published: list[Path] = []
     try:
@@ -501,8 +537,17 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
 
     if config.chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
+    period_end = config.period_end
+    if period_end is None:
+        if _is_moi_zip(config.raw_path):
+            raise ValueError("period_end is required for an MOI ZIP source")
+        period_end = CANONICAL_PERIOD_END
+    _validate_period_bound(config.period_start, "period_start")
+    _validate_period_bound(period_end, "period_end")
+    if period_end < config.period_start:
+        raise ValueError("period_end must be on or after period_start")
 
-    # 從一開始就建立 run ID，成功與失敗 audit 都能追溯同一次執行。
+    # 從一開始就建立執行 ID，成功與失敗稽核都能追溯同一次執行。
     run_id = _new_run_id()
     started_at = _utc_now()
     audit = AuditAccumulator()
@@ -511,10 +556,11 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
     lookup_sha256: str | None = None
     aliases_sha256: str | None = None
     raw_columns: list[str] = []
+    moi_inspection: MoiZipInspection | None = None
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.audit_dir.mkdir(parents=True, exist_ok=True)
-    # 所有 Parquet 先寫在 output filesystem 的 temporary directory，便於安全 rename。
+    # 所有 Parquet 先寫在輸出檔案系統的暫存目錄，完成後再安全重新命名。
     temp_dir = Path(
         tempfile.mkdtemp(
             prefix=f".cleaning-{run_id}-",
@@ -530,6 +576,8 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
         # 階段 1：掃描資料列前，完成結構、參照資料與校驗碼預檢。
         print(f"run_id={run_id}", flush=True)
         raw_columns = _validate_raw_schema(config.raw_path)
+        if _is_moi_zip(config.raw_path):
+            moi_inspection = inspect_moi_zip(config.raw_path)
         lookup, alias_map = _load_location_references(
             config.lookup_path,
             config.aliases_path,
@@ -558,6 +606,12 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
             config.chunk_size,
             duplicate_counts,
         )
+        if _is_moi_zip(config.raw_path) and any(
+            kind == "duplicate_conflict" for kind in duplicate_kinds.values()
+        ):
+            raise ValueError(
+                "MOI release contains conflicting rows for the same transaction ID"
+            )
         duplicate_summary = {
             "missing_rows": missing_ids,
             "duplicate_ids": len(duplicate_counts),
@@ -576,34 +630,41 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
         exact_seen: set[str] = set()
         processed_rows = 0
         try:
-            with pd.read_stata(
+            reader = _iter_raw_chunks(
                 config.raw_path,
-                columns=columns_to_read,
-                chunksize=config.chunk_size,
-                convert_categoricals=False,
-                convert_dates=False,
-                convert_missing=False,
-                preserve_dtypes=True,
-            ) as reader:
-                for chunk_number, chunk in enumerate(reader, start=1):
-                    result = process_chunk(
-                        chunk,
-                        run_id=run_id,
-                        global_start=processed_rows,
-                        lookup=lookup,
-                        alias_map=alias_map,
-                        duplicate_kinds=duplicate_kinds,
-                        exact_seen=exact_seen,
-                        audit=audit,
-                    )
-                    writers.write_clean(result.clean)
-                    writers.write_excluded(result.excluded)
-                    processed_rows += len(chunk)
-                    print(
-                        f"cleaning chunk={chunk_number} input={processed_rows} "
-                        f"clean={audit.clean_rows} excluded={audit.excluded_rows}",
-                        flush=True,
-                    )
+                columns_to_read,
+                config.chunk_size,
+            )
+            for chunk_number, chunk in enumerate(reader, start=1):
+                if moi_inspection is not None:
+                    for code, city in (("I", "嘉義市"), ("O", "新竹市")):
+                        key = (
+                            "temporary_dta_compatibility_mapping:"
+                            f"{code}:{city}:東區"
+                        )
+                        audit.independent_checks[key] += int(
+                            normalize_text(chunk["countycd"]).eq(code).sum()
+                        )
+                result = process_chunk(
+                    chunk,
+                    run_id=run_id,
+                    global_start=processed_rows,
+                    lookup=lookup,
+                    alias_map=alias_map,
+                    duplicate_kinds=duplicate_kinds,
+                    exact_seen=exact_seen,
+                    audit=audit,
+                    period_start=config.period_start,
+                    period_end=period_end,
+                )
+                writers.write_clean(result.clean)
+                writers.write_excluded(result.excluded)
+                processed_rows += len(chunk)
+                print(
+                    f"cleaning chunk={chunk_number} input={processed_rows} "
+                    f"clean={audit.clean_rows} excluded={audit.excluded_rows}",
+                    flush=True,
+                )
         finally:
             writers.close()
 
@@ -638,13 +699,29 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
             "status": "success",
             "started_at_utc": started_at,
             "completed_at_utc": completed_at,
-            "configuration": {"chunk_size": config.chunk_size},
+            "configuration": {
+                "chunk_size": config.chunk_size,
+                "period_start": config.period_start,
+                "period_end": period_end,
+                "source_release_id": config.source_release_id,
+            },
             "inputs": {
                 "raw": {
                     "filename": config.raw_path.name,
                     "size_bytes": config.raw_path.stat().st_size,
                     "columns": len(raw_columns),
                     "sha256": source_sha256,
+                    "format": "moi_zip" if moi_inspection else "stata",
+                    "transaction_files": (
+                        list(moi_inspection.transaction_files)
+                        if moi_inspection
+                        else None
+                    ),
+                    "temporary_location_rules": (
+                        list(moi_inspection.temporary_location_rules)
+                        if moi_inspection
+                        else []
+                    ),
                 },
                 "location_lookup": {
                     "filename": config.lookup_path.name,
@@ -706,6 +783,12 @@ def run_cleaning(config: CleaningConfig) -> CleaningResult:
             "status": "failed",
             "started_at_utc": started_at,
             "completed_at_utc": _utc_now(),
+            "configuration": {
+                "chunk_size": config.chunk_size,
+                "period_start": config.period_start,
+                "period_end": period_end,
+                "source_release_id": config.source_release_id,
+            },
             "inputs": {
                 "raw_filename": config.raw_path.name,
                 "raw_sha256": source_sha256,

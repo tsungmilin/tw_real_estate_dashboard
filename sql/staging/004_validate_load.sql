@@ -18,7 +18,7 @@ BEGIN
         count(*),
         count(*) FILTER (WHERE cleaning_run_id = p_cleaning_run_id),
         count(*) FILTER (
-            WHERE transaction_year NOT BETWEEN 2012 AND 2024
+            WHERE transaction_year NOT BETWEEN 2012 AND 9999
                OR transaction_month NOT BETWEEN 1 AND 12
         ),
         count(*) FILTER (

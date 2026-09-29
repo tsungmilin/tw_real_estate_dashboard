@@ -1,16 +1,16 @@
-"""從命令列執行資料清理 v1。"""
+"""從命令列執行第一版資料清理流程。"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from .contract import DEFAULT_CHUNK_SIZE
+from .contract import CANONICAL_PERIOD_START, DEFAULT_CHUNK_SIZE
 from .pipeline import CleaningConfig, run_cleaning
 
 
 def parse_args() -> argparse.Namespace:
-    # 預設路徑全部相對 project root，避免依賴特定執行環境的絕對路徑。
+    # 預設路徑全部相對專案根目錄，避免依賴特定環境的絕對路徑。
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -39,6 +39,25 @@ def parse_args() -> argparse.Namespace:
         default=root / "data" / "audit",
     )
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+    parser.add_argument(
+        "--period-start",
+        type=int,
+        default=CANONICAL_PERIOD_START,
+        help="民國年月 YYYMM，包含下限；預設為 10108。",
+    )
+    parser.add_argument(
+        "--period-end",
+        type=int,
+        default=None,
+        help=(
+            "民國年月 YYYMM，包含上限；MOI ZIP 必填，DTA 預設為 11312。"
+        ),
+    )
+    parser.add_argument(
+        "--source-release-id",
+        default=None,
+        help="選填；寫入清理稽核的來源發布批次識別碼。",
+    )
     return parser.parse_args()
 
 
@@ -53,6 +72,9 @@ def main() -> None:
             output_dir=args.output_dir,
             audit_dir=args.audit_dir,
             chunk_size=args.chunk_size,
+            period_start=args.period_start,
+            period_end=args.period_end,
+            source_release_id=args.source_release_id,
         )
     )
     print(f"run_id={result.run_id}")

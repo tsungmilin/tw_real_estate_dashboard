@@ -105,8 +105,8 @@ def test_execute_incremental_refreshes_all_grains_then_validates(
 
     refresh_outputs = {
         "003_refresh_national_monthly_kpi_incremental.sql": (
-            "pgload_test\t10\t0.75\t2024-07-01\t2024-07-01\t2024-07-01"
-            "\t0\t0\t\t"
+            "pgload_test\t12\t0.75\t3\t2024-10-01\t2024-07-01"
+            "\t10\t7.5\t2024-07-01\t2024-07-01\t2024-07-01\t0\t0\t\t"
         ),
         "007_refresh_city_monthly_kpi_incremental.sql": (
             "pgload_test\t2024-07-01\t2024-07-01\t22\t0\t0\t\t"
@@ -115,8 +115,9 @@ def test_execute_incremental_refreshes_all_grains_then_validates(
             "pgload_test\t2024-07-01\t2024-07-01\t368\t0\t0\t\t"
         ),
         "004_validate_national_monthly_kpi.sql": (
-            "2012-08-01\t10\t0.75\t7.5\t2024-07-01\t2024-07-01"
-            "\t2024-07-01\tPASS_ALIGNED\n144\t144\t0\t0\n"
+            "2012-08-01\t12\t0.75\t3\t2024-10-01\t2024-07-01"
+            "\t10\t7.5\t2024-07-01\t2024-07-01\t2024-07-01"
+            "\tPASS_ALIGNED\n144\t144\t0\t0\n"
             "0\t0\t0\t0\t0\t0\n0\t0\t0\t0\t0"
         ),
         "008_validate_city_monthly_kpi.sql": (
@@ -177,7 +178,8 @@ def test_validation_failure_is_recorded_and_raised(
 
     full_outputs = {
         "002_refresh_national_monthly_kpi_full.sql": (
-            "2012-08-01\t10\t0.75\t2024-07-01\t144"
+            "2012-08-01\t12\t0.75\t3\t2024-10-01\t2024-07-01"
+            "\t10\t7.5\t2024-07-01\t144"
         ),
         "006_refresh_city_monthly_kpi_full.sql": (
             "2012-08-01\t2024-07-01\t144\t22\t3168"
@@ -186,8 +188,9 @@ def test_validation_failure_is_recorded_and_raised(
             "2012-10-01\t2024-07-01\t368\t142\t52256"
         ),
         "004_validate_national_monthly_kpi.sql": (
-            "2012-08-01\t10\t0.75\t7.5\t2024-07-01\t2024-07-01"
-            "\t2024-07-01\tPASS_ALIGNED\n144\t144\t0\t0\n"
+            "2012-08-01\t12\t0.75\t3\t2024-10-01\t2024-07-01"
+            "\t10\t7.5\t2024-07-01\t2024-07-01\t2024-07-01"
+            "\tPASS_ALIGNED\n144\t144\t0\t0\n"
             "0\t1\t0\t0\t0\t0\n0\t0\t0\t0\t0"
         ),
     }

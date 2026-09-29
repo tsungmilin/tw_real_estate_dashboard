@@ -8,7 +8,7 @@
 |---|---|
 | 專案入口、成果摘要、閱讀導覽與第一次操作 | `README.md` |
 | 目前快照、驗收結果與未來展望 | `docs/project-status.md` |
-| 資料來源、更新頻率與未來換源 | `docs/data-sources.md` |
+| 資料來源、官方發布頻率、發布批次識別與封存 | `docs/data-sources.md` |
 | 系統架構與資料層邊界 | `docs/technical-spec.md` |
 | 清理規則與輸出欄位 | `docs/data-contract.md` |
 | PostgreSQL 初始化、更新與復原 | `docs/database-operations.md` |
@@ -21,10 +21,10 @@
 
 | 資訊類型 | 放置位置 | 範例 |
 |---|---|---|
-| 導覽摘要 | `README.md` | 專案目的、資料流、Dashboard 成果與閱讀順序 |
+| 導覽摘要 | `README.md` | 專案目的、資料流、儀表板成果與閱讀順序 |
 | 穩定規則 | 對應權威規格 | 欄位語意、KPI 公式、UPSERT 行為、資料層責任 |
 | 當前快照 | `docs/project-status.md` | 筆數、發布月份、測試結果與正式交付物 |
-| 執行證據 | 產生的 audit／summary | 單次清理檢查碼、排除原因與品質分布 |
+| 執行證據 | 產生的稽核／摘要 | 單次清理檢查碼、排除原因與品質分布 |
 | 歷史原因 | `docs/decision-log.md` | 決策演進及被取代項目 |
 
 快照數字若出現在 README，只能作首頁摘要，並連結 `project-status.md`；長期規格不得複製維護同一組當前數字。
@@ -52,6 +52,13 @@
 | gate | 阻擋條件／發布檢核 |
 | reference data | 參照資料 |
 | smoke test | 基本流程測試 |
+| release | 發布批次；程式欄位保留 `release_id` |
+| revision | 修訂版 |
+| checksum | 檢查碼；演算法名稱保留 SHA-256 |
+| manifest | 發布紀錄檔；程式檔名保留 `release_manifest.json` |
+| adapter | 轉接器 |
+| audit | 稽核 |
+| raw contract | 原始欄位契約 |
 
 `staging`、`core`、`analytics` 是資料庫 schema 名稱，在指涉實體名稱時保留小寫原文。
 
@@ -88,11 +95,11 @@
 
 - 相對連結均有效。
 - README 與專案進度使用相同階段。
-- README 的閱讀順序能從專案全貌逐步導向架構、契約、操作與 Dashboard。
+- README 的閱讀順序能從專案全貌逐步導向架構、契約、操作與儀表板。
 - 沒有「尚未套用」「日後完成」等過時敘述。
 - 初始化、日常更新與完整修復可以清楚區分。
 - 精確規則只有一個權威來源。
 - 當前筆數、發布月份、測試結果與正式 Tableau 檔名以專案進度為準。
-- Tableau 可攜版的 extract 已啟用、內含 Hyper，且完成離線操作驗收。
+- Tableau 可攜版的擷取檔已啟用、內含 Hyper，且完成離線操作驗收。
 - 文件或註解修改沒有改變 Python／SQL 行為。
 - 產生檔、Parquet、原始資料及私人稽核輸出未被手動修改。

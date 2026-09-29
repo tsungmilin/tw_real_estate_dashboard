@@ -1,5 +1,7 @@
--- 依目前符合條件的截止月份，完整重建全國月 KPI。
--- PostgreSQL 的 TRUNCATE 屬於交易；後續失敗會一併復原。
+-- 用途：依目前符合條件的截止月份，完整重建全國月 KPI。
+-- 寫入：清空並重建 analytics.national_monthly_kpi；失敗時整筆交易復原。
+-- 前置條件：core.fact_transactions 與 analytics 目標表已存在。
+-- 回傳：分析期間、滾動門檻、來源尾端上限與完成後月份數。
 
 BEGIN;
 
@@ -15,32 +17,47 @@ $national_monthly_full_refresh_lock$;
 
 CREATE TEMP TABLE national_monthly_full_refresh_parameter (
     analysis_start_month DATE PRIMARY KEY,
+    rolling_window_months INTEGER NOT NULL,
     tail_volume_threshold NUMERIC(5,4) NOT NULL,
+    tail_lag_months INTEGER NOT NULL,
 
     CONSTRAINT national_monthly_full_refresh_parameter_month_check
         CHECK (EXTRACT(DAY FROM analysis_start_month) = 1),
+
+    CONSTRAINT national_monthly_full_refresh_parameter_window_check
+        CHECK (rolling_window_months >= 1),
 
     CONSTRAINT national_monthly_full_refresh_parameter_threshold_check
         CHECK (
             tail_volume_threshold > 0
             AND tail_volume_threshold <= 1
-        )
+        ),
+
+    CONSTRAINT national_monthly_full_refresh_parameter_lag_check
+        CHECK (tail_lag_months >= 0)
 ) ON COMMIT DROP;
 
 INSERT INTO national_monthly_full_refresh_parameter (
     analysis_start_month,
-    tail_volume_threshold
+    rolling_window_months,
+    tail_volume_threshold,
+    tail_lag_months
 )
 VALUES (
     DATE '2012-08-01',
-    0.75
+    12,
+    0.75,
+    3
 );
 
--- 完整更新直接採用目前 core 資料算出的候選截止月份；不保留舊截止月份，
+-- 完整更新直接採用目前 `core` 資料算出的候選截止月份；不保留舊截止月份，
 -- 因此可在人工檢查後正式縮短或延伸發布範圍。
 CREATE TEMP TABLE national_monthly_full_refresh_cutoff (
     baseline_transaction_count NUMERIC,
     tail_volume_threshold NUMERIC(5,4) NOT NULL,
+    threshold_transaction_count NUMERIC,
+    source_max_month DATE NOT NULL,
+    source_ceiling_month DATE NOT NULL,
     analysis_end_month DATE
 ) ON COMMIT DROP;
 
@@ -60,33 +77,76 @@ WITH monthly_transaction_counts AS (
       AND fact.unit_price_ntd_m2 IS NOT NULL
     GROUP BY fact.transaction_month
 ),
-baseline AS (
+source_coverage AS (
     SELECT
-        PERCENTILE_CONT(0.5) WITHIN GROUP (
-            ORDER BY monthly.price_complete_transaction_count
-        )::NUMERIC AS baseline_transaction_count
+        MAX(fact.transaction_month)::DATE AS source_max_month,
+        (
+            MAX(fact.transaction_month)
+            - MAKE_INTERVAL(months => parameter.tail_lag_months)
+        )::DATE AS source_ceiling_month
+    FROM core.fact_transactions AS fact
+    CROSS JOIN national_monthly_full_refresh_parameter AS parameter
+    GROUP BY parameter.tail_lag_months
+),
+scored_months AS (
+    SELECT
+        monthly.month_start,
+        monthly.price_complete_transaction_count,
+        rolling.baseline_transaction_count,
+        rolling.baseline_month_count
     FROM monthly_transaction_counts AS monthly
+    CROSS JOIN national_monthly_full_refresh_parameter AS parameter
+    CROSS JOIN LATERAL (
+        SELECT
+            PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY history.price_complete_transaction_count
+            )::NUMERIC AS baseline_transaction_count,
+            COUNT(*)::INTEGER AS baseline_month_count
+        FROM monthly_transaction_counts AS history
+        WHERE history.month_start >= (
+                  monthly.month_start
+                  - MAKE_INTERVAL(months => parameter.rolling_window_months)
+              )::DATE
+          AND history.month_start < monthly.month_start
+    ) AS rolling
+),
+candidate_cutoff AS (
+    SELECT
+        scored.month_start::DATE AS analysis_end_month,
+        scored.baseline_transaction_count
+    FROM scored_months AS scored
+    CROSS JOIN source_coverage AS coverage
+    CROSS JOIN national_monthly_full_refresh_parameter AS parameter
+    WHERE scored.baseline_month_count BETWEEN 1 AND parameter.rolling_window_months
+      AND scored.month_start <= coverage.source_ceiling_month
+      AND scored.price_complete_transaction_count
+          >= scored.baseline_transaction_count
+             * parameter.tail_volume_threshold
+    ORDER BY scored.month_start DESC
+    LIMIT 1
 )
 INSERT INTO national_monthly_full_refresh_cutoff (
     baseline_transaction_count,
     tail_volume_threshold,
+    threshold_transaction_count,
+    source_max_month,
+    source_ceiling_month,
     analysis_end_month
 )
 SELECT
-    baseline.baseline_transaction_count,
+    candidate.baseline_transaction_count,
     parameter.tail_volume_threshold,
-    MAX(monthly.month_start)::DATE AS analysis_end_month
-FROM monthly_transaction_counts AS monthly
-CROSS JOIN baseline
+    candidate.baseline_transaction_count
+        * parameter.tail_volume_threshold,
+    coverage.source_max_month,
+    coverage.source_ceiling_month,
+    candidate.analysis_end_month
+FROM candidate_cutoff AS candidate
+CROSS JOIN source_coverage AS coverage
 CROSS JOIN national_monthly_full_refresh_parameter AS parameter
-WHERE monthly.price_complete_transaction_count
-      >= baseline.baseline_transaction_count
-         * parameter.tail_volume_threshold
-GROUP BY
-    baseline.baseline_transaction_count,
-    parameter.tail_volume_threshold;
+;
 
--- 必須先成功算出截止月份，才允許清空並重建正式 Analytics 表。
+-- 必須先成功算出截止月份，才允許清空並重建正式 `analytics` 表。
 DO $national_monthly_full_refresh_cutoff_gate$
 DECLARE
     v_analysis_start_month DATE;
@@ -346,8 +406,13 @@ FROM with_yoy;
 -- 回傳本次完整更新採用的截止月份與完成後月份數，供人工核對。
 SELECT
     parameter.analysis_start_month,
+    parameter.rolling_window_months,
+    parameter.tail_volume_threshold,
+    parameter.tail_lag_months,
+    cutoff.source_max_month,
+    cutoff.source_ceiling_month,
     cutoff.baseline_transaction_count,
-    cutoff.tail_volume_threshold,
+    cutoff.threshold_transaction_count,
     cutoff.analysis_end_month,
     COUNT(target.month_start)::BIGINT AS refreshed_month_count
 FROM national_monthly_full_refresh_parameter AS parameter
@@ -357,8 +422,13 @@ LEFT JOIN analytics.national_monthly_kpi AS target
        parameter.analysis_start_month AND cutoff.analysis_end_month
 GROUP BY
     parameter.analysis_start_month,
+    parameter.rolling_window_months,
+    parameter.tail_volume_threshold,
+    parameter.tail_lag_months,
+    cutoff.source_max_month,
+    cutoff.source_ceiling_month,
     cutoff.baseline_transaction_count,
-    cutoff.tail_volume_threshold,
+    cutoff.threshold_transaction_count,
     cutoff.analysis_end_month;
 
 COMMIT;

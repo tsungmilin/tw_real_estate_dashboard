@@ -35,13 +35,19 @@ def test_national_monthly_table_enforces_metric_contract() -> None:
     assert "price_complete_transaction_count_yoy >= -1" in sql
 
 
-def test_full_refresh_uses_dynamic_75_percent_cutoff_before_truncate() -> None:
+def test_full_refresh_uses_rolling_cutoff_and_source_lag_before_truncate() -> None:
     sql = _analytics_sql("002_refresh_national_monthly_kpi_full.sql")
 
     assert "DATE '2024-07-01'" not in sql
+    assert "rolling_window_months" in sql
+    assert "12" in sql
     assert "0.75" in sql
+    assert "tail_lag_months" in sql
+    assert "MAKE_INTERVAL(months => parameter.tail_lag_months)" in sql
     assert "PERCENTILE_CONT(0.5)" in sql
-    assert "MAX(monthly.month_start)::DATE AS analysis_end_month" in sql
+    assert "history.month_start < monthly.month_start" in sql
+    assert "scored.month_start <= coverage.source_ceiling_month" in sql
+    assert "candidate.analysis_end_month" in sql
     assert "national_monthly_full_refresh_cutoff_gate" in sql
     assert sql.index("national_monthly_full_refresh_cutoff_gate") < sql.index(
         "TRUNCATE TABLE analytics.national_monthly_kpi"
@@ -67,6 +73,10 @@ def test_incremental_refresh_extends_without_automatic_shrink() -> None:
 
     assert "\\if :{?load_batch_id}" in sql
     assert "PERCENTILE_CONT(0.5)" in sql
+    assert "rolling_window_months" in sql
+    assert "tail_lag_months" in sql
+    assert "source_ceiling_month" in sql
+    assert "history.month_start < monthly.month_start" in sql
     assert "candidate_end_month" in sql
     assert "current_end_month" in sql
     assert "GREATEST(" in sql
@@ -82,6 +92,9 @@ def test_validation_sql_recomputes_and_does_not_modify_permanent_data() -> None:
     sql = _analytics_sql("004_validate_national_monthly_kpi.sql")
 
     assert "FROM core.fact_transactions AS fact" in sql
+    assert "rolling_window_months" in sql
+    assert "tail_lag_months" in sql
+    assert "source_ceiling_month" in sql
     assert "national_monthly_expected_kpi" in sql
     assert "PASS_ALIGNED" in sql
     assert "REVIEW_CURRENT_AHEAD_OF_CANDIDATE" in sql

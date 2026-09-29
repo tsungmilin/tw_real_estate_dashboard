@@ -1,16 +1,16 @@
 # 資料清理與欄位契約
 
-本文件是 Python 清理行為與 `transactions_clean`／`transactions_excluded` 欄位的權威來源。它維護穩定規則，不重複保存會隨來源更新的筆數與檢查碼；目前快照見 [專案進度](project-status.md)，來源與更新方式見 [資料來源與未來更新](data-sources.md)，系統邊界見 [技術規格](technical-spec.md)。
+本文件是 Python 清理行為與 `transactions_clean`／`transactions_excluded` 欄位的權威來源。它維護穩定規則，不重複保存會隨來源更新的筆數與檢查碼；目前快照見 [專案進度](project-status.md)，來源與更新方式見 [資料來源與更新](data-sources.md)，系統邊界見 [技術規格](technical-spec.md)。
 
 ## 1. 適用資料
 
 | 項目 | 值 |
 |---|---|
-| 原始檔 | `data/raw/house_preowned_data_2.0.dta` |
-| 標準期間 | 2012-08 至 2024-12 |
+| 原始來源 | DTA 初始底稿，後續接 MOI 買賣發布批次 ZIP |
+| 標準期間 | 2012-08 至本次來源的 `period_end`；DTA 底稿上限為 2024-12 |
 | 預設分批大小 | 100,000 筆 |
 
-原始 `.dta` 不可變、不覆寫，也不隨公開專案提供。清理流程只讀取必要欄位，分批處理全部資料列；Parquet 是可重建的成功檢查點，不保存每次完整快照。
+原始 DTA 與各 MOI 發布批次 ZIP 都不可變、不覆寫，也不隨公開專案提供。DTA 讀取器直接提供既有的 24 欄原始欄位契約；MOI 讀取器只讀 `*_lvr_land_a.csv`，先經轉接器轉成相同契約。清理流程分批處理必要欄位；Parquet 是可重建的成功檢查點，不保存每次完整快照。
 
 ## 2. 資料列納入與排除
 
@@ -30,6 +30,8 @@
 
 相同 ID 且內容相同時保留第一次出現的資料，其餘列為 `duplicate_exact`；相同 ID 但內容不同時整組排除為 `duplicate_conflict`。不同 ID 即使內容相同，也不視為重複交易。
 
+上述重複資料規則只處理同一次清理輸入。跨 MOI 發布批次的相同 ID 不在清理階段合併；後續由 `staging` 以較晚批次的內容新增或更新（UPSERT）。某一批次未出現既有 ID 時不刪除。
+
 ## 3. 共通轉換原則
 
 - 文字去除前後空白並統一全形／半形英數字；空字串轉為 `NULL`。
@@ -42,7 +44,7 @@
 ## 4. 日期規則
 
 - `trans_y` 為民國年，轉換時加 1911；`trans_m` 只接受 1–12。
-- 年月缺失、無效或超出標準期間時排除為 `invalid_transaction_period`。
+- 年月缺失、無效、早於 2012-08，或晚於本次來源 `period_end` 時排除為 `invalid_transaction_period`。MOI 發布批次可以包含早於發布月份的補登或修訂，不使用 `2025-01` 作交易年月下限。
 - 年月有效但日期缺失或無效時保留資料列，`transaction_date=NULL`、`transaction_date_valid=FALSE`。
 - `date_complete` 只解析正值且為 6／7 位的民國 `yyyymmdd`。
 - 完工日晚於交易日只設定 `completion_after_transaction`，不修改或排除資料。
@@ -62,7 +64,9 @@
 
 `data/reference/location_lookup.csv` 是行政區權威來源，必須包含 368 筆行政區、22 個縣市，且官方 ID 與名稱關係唯一。原始資料以 `countycd + 標準化 town` 對應，`county` 只作交叉驗證。
 
-已確認三個舊名／簡寫：`頭份鎮 → 頭份市`、`員林鎮 → 員林市`、`阿里山 → 阿里山鄉`。歷史 `桃園縣` 透過代碼對應為 `桃園市`。無法對應的資料列排除為 `unmapped_location`。
+共用參照已確認三個舊名／簡寫：`頭份鎮 → 頭份市`、`員林鎮 → 員林市`、`阿里山 → 阿里山鄉`。歷史 `桃園縣` 透過代碼對應為 `桃園市`。MOI 轉接器另處理來源字形 `台東市 → 臺東市`、`台西鄉 → 臺西鄉`，不改動 DTA 共用別名。無法對應的資料列排除為 `unmapped_location`。
+
+MOI 對新竹市、嘉義市不提供本專案可直接使用的行政區粒度。第一版為維持既有行政區模型，將兩市所有來源列暫時映射到東區，並在稽核結果保存套用筆數。這是相容規則，不代表交易真實行政區，也不得用於解讀兩市的區別差異。
 
 清理後 Parquet 保存 `county_id`、`town_id`、`city`、`district`；資料倉儲代理鍵 `location_id` 只存在於 PostgreSQL `core`。
 
@@ -143,9 +147,11 @@
 - 清理後 `source_transaction_id` 唯一且不可為 `NULL`。
 - `input_rows = clean_rows + excluded_rows`。
 - 輸出可完整寫入、讀回，且欄位結構與筆數一致。
-- 相同來源檢查碼可重現既有基準。
+- DTA 已知檢查碼可重現既有精確基準；MOI 發布批次不沿用 DTA 的固定筆數基準。
+- MOI 的缺少 ID、衝突 ID 與無法對應 location 必須為 0，且兩市暫時映射筆數已記錄。
+- MOI 稽核必須保存 `source_release_id`、來源檢查碼、主檔清單及本次 `period_end`。
 
-目前來源的已驗證筆數、檢查碼與排除基準統一記錄在 [專案進度](project-status.md) 及 `data/audit/` 的最新成功報告。來源改變時，舊數字只作比較；綱要、唯一性、輸出讀回與筆數對帳仍是強制檢核。
+目前來源的已驗證筆數、檢查碼與排除基準統一記錄在 [專案進度](project-status.md) 及 `data/audit/` 的最新成功報告。不同 MOI 發布批次的筆數可以不同；欄位結構、唯一性、輸出讀回與筆數對帳仍是強制檢核。發布批次身分與保存規則見 [資料來源與更新](data-sources.md)。
 
 發布流程先寫入暫存檔；全部檢核通過後才一起更新目前的清理後 Parquet、排除 Parquet 與稽核 JSON。失敗時保留失敗稽核，但不覆蓋上一版成功輸出。
 
